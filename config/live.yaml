@@ -1,0 +1,47 @@
+execution_mode: live
+symbols:
+  - AAPL
+  - MSFT
+timeframe: 15Min
+
+# Live trading requires explicit review, test coverage, and operational signoff.
+strategy:
+  strategy_mode: mean_reversion
+  sma_bars: 20
+  long_sma_bars: 50
+  entry_threshold_pct: 1.0
+  exit_threshold_pct: 0.3
+  trend_filter_enabled: true
+  max_below_long_sma_pct: 0.02
+  stop_loss_enabled: true
+  stop_loss_pct: 0.01
+  breakout_sma_bars: 20
+  breakout_threshold_pct: 0.002
+  momentum_exit_threshold_pct: 0.001
+  momentum_stop_loss_pct: 0.01
+  require_positive_sma_slope: true
+  max_atr_percentile: 70
+
+risk:
+  max_position_value: 100
+  max_open_positions: 1
+  max_daily_loss: 50
+  allow_shorting: false
+  entry_start_time: "14:00"
+  entry_end_time: "19:30"
+  no_entry_after: "15:30"
+  force_flatten_at: "15:55"
+
+data:
+  feed: iex
+  max_bar_age_seconds: 120
+  require_same_session: true
+  alignment_mode: strict
+
+broker:
+  name: alpaca
+  paper: false
+
+backtest_costs:
+  commission_per_trade: 0
+  slippage_bps: 0

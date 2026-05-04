@@ -1,0 +1,4 @@
+strategy:
+  name: mean_reversion
+  enabled: false
+  symbols: []

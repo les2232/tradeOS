@@ -1,0 +1,63 @@
+execution_mode: paper
+
+symbols:
+  - AAPL
+  - MSFT
+  - NVDA
+
+timeframe: 15Min
+
+strategy:
+  strategy_mode: momentum_breakout
+  sma_bars: 20
+  long_sma_bars: 50
+  entry_threshold_pct: 1.0
+  exit_threshold_pct: 0.3
+  trend_filter_enabled: true
+  max_below_long_sma_pct: 0.02
+  stop_loss_enabled: true
+  stop_loss_pct: 0.01
+
+  # Momentum-specific settings
+  breakout_sma_bars: 20
+  breakout_threshold_pct: 0.002
+  momentum_exit_threshold_pct: 0.001
+  momentum_stop_loss_pct: 0.01
+  require_positive_sma_slope: true
+
+  max_atr_percentile: 80
+
+risk:
+  max_position_value: 1000
+  max_open_positions: 3
+  max_daily_loss: 250
+  allow_shorting: false
+
+  # Base time window
+  entry_start_time: "14:00"
+  entry_end_time: "19:30"
+
+  # Evidence-based filters
+  allowed_symbols:
+    - AAPL
+    - MSFT
+    - NVDA
+
+  refined_entry_hours: []
+
+  no_entry_after: "15:30"
+  force_flatten_at: "15:55"
+
+data:
+  feed: iex
+  max_bar_age_seconds: 120
+  require_same_session: true
+  alignment_mode: strict
+
+broker:
+  name: alpaca
+  paper: true
+
+backtest_costs:
+  commission_per_trade: 0
+  slippage_bps: 0
