@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.14"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install project and CI dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev,web]" build
+
+      - name: Run complete test suite
+        run: python -m pytest
+
+      - name: Check installed dependencies
+        run: python -m pip check
+
+      - name: Build wheel
+        run: python -m build --wheel --outdir wheelhouse
+
+      - name: Verify packaged dashboard and sample generator
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheels = list(Path("wheelhouse").glob("*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"Expected one wheel, found {len(wheels)}")
+
+          required = {
+              "tradeos/web/templates/index.html",
+              "tradeos/web/static/dashboard.css",
+              "tradeos/web/static/dashboard.js",
+              "tradeos/data/sample_dataset.py",
+          }
+          with ZipFile(wheels[0]) as wheel:
+              missing = required - set(wheel.namelist())
+          if missing:
+              raise SystemExit(f"Wheel is missing required files: {sorted(missing)}")
+          print("Wheel contains dashboard assets and shared sample generator")
+
+          PY

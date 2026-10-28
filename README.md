@@ -2,6 +2,16 @@
 
 TradeOS V3 is a clean rebuild of the trading system focused on safety, reliability, testability, and live/backtest parity.
 
+## Automated Checks
+
+[![CI](https://github.com/les2232/tradeOS/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/les2232/tradeOS/actions/workflows/ci.yml)
+
+Pull requests targeting `main`, pushes to `main`, and manual runs execute the
+full offline/simulated test suite on Python 3.11 and 3.14. CI installs the web
+and development dependencies, checks dependency consistency, builds a wheel,
+and verifies the dashboard assets and shared sample generator are packaged.
+Tests run without broker credentials or repository secrets.
+
 ## Browser dashboard (offline research)
 
 From the repository root, install the optional web dependency and start:
