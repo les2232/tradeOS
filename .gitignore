@@ -19,7 +19,7 @@ dist/
 .env.*
 !.env.example
 
-data/
+/data/
 results/
 reports/
 research_memory/

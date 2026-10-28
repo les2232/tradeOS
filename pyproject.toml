@@ -11,13 +11,18 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "Flask>=3.1,<4",
 ]
+web = ["Flask>=3.1,<4"]
 paper = [
     "alpaca-py>=0.35",
 ]
 
 [tool.setuptools.packages.find]
 include = ["tradeos*"]
+
+[tool.setuptools.package-data]
+"tradeos.web" = ["templates/*.html", "static/*.css", "static/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
