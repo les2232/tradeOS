@@ -39,7 +39,8 @@ def test_supervised_browser_workflow(paper):
             page.locator('#paper-confirm').check()
             page.locator('[data-paper="start"]').click()
             expect(page.locator('#paper-message')).to_contain_text('requested')
-            page.wait_for_function("document.querySelector('#paper-state').textContent.includes('broker-1')")
+            # expect() polls without eval, which the dashboard CSP (script-src 'self') blocks.
+            expect(page.locator('#paper-state')).to_contain_text('broker-1')
             assert broker.submit_order.call_count == 1
             page.locator('[data-paper="stop"]').click()
             supervisor.thread.join(timeout=3)

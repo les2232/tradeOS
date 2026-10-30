@@ -7,10 +7,21 @@ TradeOS V3 is a clean rebuild of the trading system focused on safety, reliabili
 [![CI](https://github.com/les2232/tradeOS/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/les2232/tradeOS/actions/workflows/ci.yml)
 
 Pull requests targeting `main`, pushes to `main`, and manual runs execute the
-full offline/simulated test suite on Python 3.11 and 3.14. CI installs the web
-and development dependencies, checks dependency consistency, builds a wheel,
+full offline/simulated test suite on Python 3.11 and 3.14. CI installs the web,
+development, paper (`alpaca-py`) and browser (Playwright Chromium) dependencies,
+fails if any test is skipped, checks dependency consistency, builds a wheel,
 and verifies the dashboard assets and shared sample generator are packaged.
-Tests run without broker credentials or repository secrets.
+Tests run without broker credentials, repository secrets, or network access:
+the Alpaca SDK is exercised against mocks and the browser test uses a fake broker.
+
+To run the same suite locally with nothing skipped:
+
+```bash
+python -m pip install -e ".[dev,web,paper,browser]"
+export PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright"
+python -m playwright install --with-deps chromium
+python -m pytest
+```
 
 ## Browser dashboard (offline research)
 
