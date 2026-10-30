@@ -19,6 +19,8 @@ jobs:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.ms-playwright
     strategy:
       fail-fast: false
       matrix:
@@ -36,10 +38,19 @@ jobs:
       - name: Install project and CI dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install ".[dev,web]" build
+          python -m pip install ".[dev,web,paper,browser]" build
 
-      - name: Run complete test suite
-        run: python -m pytest
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run complete test suite (no skips allowed)
+        shell: bash
+        run: |
+          python -m pytest -rs | tee pytest.log
+          if grep -qE "[0-9]+ skipped" pytest.log; then
+            echo "::error::Tests were skipped; CI must run the full suite"
+            exit 1
+          fi
 
       - name: Check installed dependencies
         run: python -m pip check

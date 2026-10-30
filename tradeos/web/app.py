@@ -9,11 +9,49 @@ from flask import Flask, jsonify, render_template, request
 from tradeos.web.service import run_research
 
 
-def create_app(config_path: str | Path = "config/paper.yaml") -> Flask:
+def create_app(config_path: str | Path = "config/paper.yaml", *, paper_supervisor=None) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 2_100_000
     config_path = Path(config_path).resolve()
     run_lock = Lock()
+    from tradeos.web.paper import PaperSupervisor
+    paper = paper_supervisor or PaperSupervisor(config_path)
+    app.extensions["paper"] = paper
+
+    @app.get("/api/paper")
+    def paper_status():
+        return jsonify(paper.view())
+
+    @app.get("/api/paper/history")
+    def paper_history():
+        response = jsonify(paper.history())
+        response.headers["Content-Disposition"] = 'attachment; filename="paper-journal.json"'
+        return response
+
+    @app.post("/api/paper/<action>")
+    def paper_action(action):
+        if request.headers.get("X-TradeOS-Request") != "paper" or not request.is_json:
+            return jsonify(error="Use the paper dashboard controls"), 400
+        payload = request.get_json()
+        if not isinstance(payload, dict):
+            return jsonify(error="Expected JSON object"), 400
+        try:
+            if action == "stop":
+                result = paper.stop()
+            elif action == "start":
+                if payload.get("confirm_paper_orders") is not True:
+                    raise ValueError("Explicit paper order confirmation required")
+                result = paper.start(payload.get("interval", 60), payload.get("cycles", 5))
+            elif action in {"check", "evaluate"}:
+                if paper.active:
+                    raise ValueError("Stop the active session before a manual check")
+                result = paper.check(evaluate=action == "evaluate")
+            else:
+                raise ValueError("Unknown paper action")
+            return jsonify(result)
+        except ValueError as exc:
+            return jsonify(error=str(exc), status=paper.view()), 400
+
 
     @app.after_request
     def headers(response):

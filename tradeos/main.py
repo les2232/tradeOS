@@ -185,12 +185,7 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
     parser.add_argument(
         "--paper-live-once",
         action="store_true",
-        help="Run one paper-safe live data loop using the configured paper broker.",
-    )
-    parser.add_argument(
-        "--submit-paper-orders",
-        action="store_true",
-        help="Allow --paper-live-once to submit orders to the paper broker.",
+        help="Run one read-only paper pass; never submits orders.",
     )
     parser.add_argument("--symbols", help="Comma-separated symbols for history download.")
     parser.add_argument("--start", help="History download start date/datetime.")
@@ -230,8 +225,6 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
         return 0
     if args.config is None:
         parser.error("--config is required for this command")
-    if args.submit_paper_orders and not args.paper_live_once:
-        parser.error("--submit-paper-orders requires --paper-live-once")
     if args.dataset_csv and args.preview_cycles is None:
         parser.error("--dataset-csv requires --preview-cycles")
     if args.save_research_result and args.backtest_csv is None:
@@ -255,7 +248,7 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
 
     config = load_config(args.config)
     if args.paper_live_once:
-        _run_paper_live_once(config, submit_orders=args.submit_paper_orders, env=env)
+        _run_paper_live_once(config, env=env)
         return 0
     if args.backtest_csv is not None:
         active_strategy = _strategy_config_with_overrides(config.strategy, args)
@@ -366,9 +359,9 @@ def _run_download_history(
 def _run_paper_live_once(
     config,
     *,
-    submit_orders: bool = False,
     env: Mapping[str, str] | None = None,
 ) -> None:
+    """Run one read-only paper pass; paper orders are submitted only from the browser console."""
     market_data = _paper_market_data_from_env(feed=config.data.feed, env=env)
     event_store = SQLiteEventStore("data/paper_live_events.sqlite")
     broker = AlpacaPaperBroker.from_env(paper=config.broker.paper, env=env)
@@ -377,7 +370,7 @@ def _run_paper_live_once(
         risk_manager=RiskManager(),
         broker=broker,
         reconciliation_service=ReconciliationService(),
-        execute_orders=submit_orders,
+        execute_orders=False,
         event_store=event_store,
     )
     try:
@@ -386,7 +379,7 @@ def _run_paper_live_once(
             broker=broker,
             market_data=market_data,
             cycle=cycle,
-            allow_order_submission=submit_orders,
+            allow_order_submission=False,
         ).run_once()
     except TradingLoopSafetyError as exc:
         print(f"paper live loop blocked: {exc}")
@@ -401,7 +394,7 @@ def _run_paper_live_once(
         print(f"unmanaged positions: {', '.join(result.unmanaged_positions)}")
     else:
         print("unmanaged positions: none")
-    print(f"paper order submission: {_yes_no(submit_orders)}")
+    print("paper order submission: no")
     print("cycle results:")
     for cycle_result in result.results:
         blocked_rules = (
