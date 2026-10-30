@@ -1,4 +1,5 @@
 from dataclasses import replace
+import threading
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
 from types import SimpleNamespace as NS
@@ -198,3 +199,78 @@ def test_session_limit_finishes_without_resume(paper):
     assert p.view()['completed'] == 1
     assert p.view()['state'] == 'stopped'
     assert any(e['event_type'] == 'paper_session_ended' for e in p.history())
+
+
+class StaleActiveReadSupervisor(PaperSupervisor):
+    """Widens stop()'s read-active/write-state window so the session can end inside it."""
+
+    def __init__(self, *args, **kwargs):
+        self.armed, self.release, self.run_done = False, threading.Event(), threading.Event()
+        super().__init__(*args, **kwargs)
+
+    @property
+    def active(self):
+        value = self._active
+        if self.armed and threading.current_thread() is not self.thread:
+            self.armed = False
+            self.release.set()
+            # Without status_lock the session finishes here; with it, the session waits for stop().
+            self.run_done.wait(1)
+        return value
+
+    @active.setter
+    def active(self, value):
+        self._active = value
+
+    def _run(self, interval, cycles):
+        try:
+            super()._run(interval, cycles)
+        finally:
+            self.run_done.set()
+
+
+def test_stop_racing_session_end_never_leaves_stopping(paper):
+    p, broker, feed = paper
+    racy = StaleActiveReadSupervisor('unused', p.path, lambda _: (broker, feed))
+    bars = feed.recent_bars.return_value
+    feed.recent_bars.side_effect = lambda *a, **kw: racy.release.wait(5) and bars
+    racy.start(5, 1)
+    racy.armed = True
+    racy.stop()
+    racy.thread.join(timeout=5)
+    view = racy.view()
+    assert view['active'] is False
+    assert view['state'] == 'stopped'
+
+
+def test_concurrent_view_and_stop_during_session(paper):
+    # Deadlock/exception smoke test; the GIL makes torn reads too rare to assert on reliably.
+    p, broker, feed = paper
+    bars = feed.recent_bars.return_value
+    in_check = threading.Event()
+    feed.recent_bars.side_effect = lambda *a, **kw: in_check.set() or bars
+    errors = []
+
+    def hammer(stop_at):
+        try:
+            for i in range(300):
+                view = p.view()
+                assert view['state'] in {'running', 'stopping', 'stopped', 'idle'}
+                if i == stop_at:
+                    p.stop()
+        except Exception as exc:  # surfaced below; threads swallow assertion errors
+            errors.append(exc)
+
+    p.start(5, 3)
+    assert in_check.wait(5)
+    threads = [threading.Thread(target=hammer, args=(50 * n,)) for n in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    p.thread.join(timeout=10)
+    assert errors == []
+    assert not p.thread.is_alive()
+    view = p.view()
+    assert view['active'] is False
+    assert view['state'] == 'stopped'
