@@ -143,11 +143,7 @@ python -m tradeos.main --config config/momentum_test.yaml --paper-live-once
 The loop loads recent historical bars first so strategies have enough SMA
 context before evaluating the latest live bar.
 
-By default, this does not submit paper orders. To allow paper order submission, use the explicit opt-in flag:
-
-```bash
-python -m tradeos.main --config config/momentum_test.yaml --paper-live-once --submit-paper-orders
-```
+This pass is read-only: paper orders are submitted only from the browser console.
 
 ## Generate Sample Dataset
 

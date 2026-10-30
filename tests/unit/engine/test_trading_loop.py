@@ -293,6 +293,39 @@ def test_paper_loop_blocks_submission_when_open_orders_exist() -> None:
         loop.run_once()
 
 
+def test_paper_loop_blocks_submission_when_unmanaged_positions_exist() -> None:
+    position = Position(
+        symbol="COP",
+        quantity=Decimal("8"),
+        avg_entry_price=Decimal("119.13"),
+        market_value=Decimal("953.04"),
+        unrealized_pl=Decimal("-20.16"),
+        source="alpaca_paper_short",
+    )
+    broker = FakeBroker(
+        PortfolioState(
+            cash=Decimal("10000"),
+            equity=Decimal("10953.04"),
+            buying_power=Decimal("10000"),
+            positions=[position],
+            timestamp=datetime(2026, 4, 27, 14, 30, tzinfo=UTC),
+        )
+    )
+    loop = PaperTradingLoop(
+        config=config(),
+        broker=broker,
+        market_data=StaticMarketData([bar("AAPL"), bar("MSFT")]),
+        cycle=cycle(StaticSignalStrategy(action=TradeAction.BUY)),
+        allow_order_submission=True,
+    )
+
+    with pytest.raises(
+        TradingLoopSafetyError,
+        match=r"paper order submission blocked by unmanaged positions: COP\(outside_config,short\)",
+    ):
+        loop.run_once()
+
+
 def test_paper_loop_keeps_symbol_history_between_passes() -> None:
     strategy = CapturingStrategy()
     loop = PaperTradingLoop(
