@@ -70,7 +70,7 @@ def test_paper_live_once_runs_with_injected_adapters(monkeypatch, capsys) -> Non
         staticmethod(lambda **kwargs: FakeBroker(account())),
     )
     monkeypatch.setattr(
-        "tradeos.main.AlpacaLatestBarFeed.from_env",
+        "tradeos.main._paper_market_data_from_env",
         staticmethod(lambda **kwargs: StaticMarketData()),
     )
     monkeypatch.setattr(
@@ -103,7 +103,7 @@ def test_paper_live_once_reports_unmanaged_positions(monkeypatch, capsys) -> Non
         staticmethod(lambda **kwargs: FakeBroker(account_with_position(position))),
     )
     monkeypatch.setattr(
-        "tradeos.main.AlpacaLatestBarFeed.from_env",
+        "tradeos.main._paper_market_data_from_env",
         staticmethod(lambda **kwargs: StaticMarketData()),
     )
     monkeypatch.setattr(
@@ -133,7 +133,7 @@ def test_submit_paper_orders_blocks_unmanaged_positions(monkeypatch, capsys) -> 
         staticmethod(lambda **kwargs: FakeBroker(account_with_position(position))),
     )
     monkeypatch.setattr(
-        "tradeos.main.AlpacaLatestBarFeed.from_env",
+        "tradeos.main._paper_market_data_from_env",
         staticmethod(lambda **kwargs: StaticMarketData()),
     )
     monkeypatch.setattr(
@@ -170,7 +170,7 @@ def test_paper_live_once_prints_safety_block(monkeypatch, capsys) -> None:
         staticmethod(lambda **kwargs: FakeBroker(account())),
     )
     monkeypatch.setattr(
-        "tradeos.main.AlpacaLatestBarFeed.from_env",
+        "tradeos.main._paper_market_data_from_env",
         staticmethod(lambda **kwargs: BlockingMarketData()),
     )
     monkeypatch.setattr(

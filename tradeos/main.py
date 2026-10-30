@@ -29,8 +29,6 @@ from tradeos.backtest.walk_forward import (
 )
 from tradeos.config.loader import load_config
 from tradeos.config.schema import StrategyConfig
-from tradeos.data.alpaca_market_data import download_historical_bars_to_csv
-from tradeos.data.alpaca_market_data import AlpacaLatestBarFeed
 from tradeos.data.historical_dataset import DatasetSummary, load_bars_from_csv, summarize_bars
 from tradeos.domain.enums import DataQualityStatus
 from tradeos.domain.models import Bar, PortfolioState
@@ -48,6 +46,29 @@ from tradeos.storage.sqlite import SQLiteEventStore
 from tradeos.strategy.mean_reversion import MeanReversionStrategy
 from tradeos.strategy.momentum_breakout import MomentumBreakoutStrategy
 from tradeos.domain.enums import StrategyMode
+
+
+def _market_data_adapter():
+    """Load optional online code only when an online operation is requested."""
+    from importlib import import_module
+
+    try:
+        return import_module("tradeos.data.alpaca_market_data")
+    except ModuleNotFoundError as exc:
+        if exc.name != "tradeos.data.alpaca_market_data":
+            raise
+        raise RuntimeError(
+            "Online market-data adapter is absent from this checkout; "
+            "use --dry-run-once or --backtest-csv for offline research."
+        ) from exc
+
+
+def download_historical_bars_to_csv(**kwargs):
+    return _market_data_adapter().download_historical_bars_to_csv(**kwargs)
+
+
+def _paper_market_data_from_env(**kwargs):
+    return _market_data_adapter().AlpacaLatestBarFeed.from_env(**kwargs)
 
 
 def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = None) -> int:
@@ -348,9 +369,9 @@ def _run_paper_live_once(
     submit_orders: bool = False,
     env: Mapping[str, str] | None = None,
 ) -> None:
+    market_data = _paper_market_data_from_env(feed=config.data.feed, env=env)
     event_store = SQLiteEventStore("data/paper_live_events.sqlite")
     broker = AlpacaPaperBroker.from_env(paper=config.broker.paper, env=env)
-    market_data = AlpacaLatestBarFeed.from_env(feed=config.data.feed, env=env)
     cycle = TradingCycle(
         strategy=_strategy_from_config(config.strategy),
         risk_manager=RiskManager(),

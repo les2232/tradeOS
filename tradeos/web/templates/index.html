@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TradeOS · Research desk</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+  <script src="{{ url_for('static', filename='dashboard.js') }}" defer></script>
+</head>
+<body>
+<aside class="rail">
+  <a class="brand" href="/" aria-label="TradeOS home"><span class="brand-icon">T</span>TradeOS <small>V3</small></a>
+  <p class="eyebrow">WORKSPACE</p>
+  <a class="nav active" href="#workspace"><span>◫</span> Research desk</a>
+  <a class="nav" href="#trades"><span>≡</span> Closed trades</a>
+  <a class="nav" href="#risk"><span>◇</span> Risk decisions</a>
+  <div class="rail-bottom"><span class="dot"></span> Offline engine<p>Simulated execution only.<br>No broker connection.</p></div>
+</aside>
+<main id="workspace">
+  <header><span class="breadcrumb">WORKSPACE <span>/</span> RESEARCH</span><span class="badge">● &nbsp; OFFLINE ONLY</span></header>
+  <section class="intro"><div><p class="eyebrow">TEST AN IDEA. INSPECT THE EVIDENCE.</p><h1>Research desk</h1><p>Explore a strategy before drawing conclusions.</p></div><span class="version">TRADEOS / 003</span></section>
+  <div class="workspace-grid">
+    <section class="panel setup"><div class="panel-heading"><h2>Experiment setup</h2><span>01</span></div>
+      <form id="experiment">
+        <label for="source">Dataset</label><select id="source"><option value="sample">Synthetic sample · 1,500 bars</option><option value="csv">Upload historical CSV</option></select>
+        <p class="hint" id="source-hint">AAPL · MSFT · NVDA / 15-minute bars / seed 42</p>
+        <div id="upload-fields" hidden><label for="csv-file">Choose CSV</label><input id="csv-file" type="file" accept=".csv,text/csv"><p class="hint">Up to 2 MB, 10,000 bars, 3,000 per symbol. Use AAPL, MSFT or NVDA and 15Min bars.</p><details><summary>CSV format</summary><p class="hint">Columns: symbol, timestamp, open, high, low, close, volume, timeframe. Timestamps need a timezone, e.g. 2026-04-20T14:00:00Z.</p></details></div>
+        <label for="strategy">Strategy</label><select id="strategy"><option value="mean_reversion">Mean reversion</option><option value="momentum_breakout">Momentum breakout</option></select>
+        <div class="pair"><div><label for="entry">Entry threshold (%)</label><input id="entry" type="number" min="0.001" max="100" step="0.001" value="0.5" required></div><div><label for="exit">Exit threshold (%)</label><input id="exit" type="number" min="0.001" max="100" step="0.001" value="0.5" required></div></div>
+        <div class="pair"><div><label for="commission">Commission ($ / order)</label><input id="commission" type="number" min="0" max="100" step="0.01" value="0" required></div><div><label for="slippage">Slippage (bps)</label><input id="slippage" type="number" min="0" max="100" step="0.1" value="0" required></div></div>
+        <p class="hint">1 basis point = 0.01%. Risk rules come from the existing configuration. Open positions are flattened at the end of the test.</p>
+        <button class="primary" id="run" type="submit">Run backtest <span>→</span></button>
+        <p id="status" role="status" aria-live="polite">Ready. Run the sample to explore the dashboard.</p>
+      </form>
+    </section>
+    <div class="results">
+      <div class="result-heading"><h2>Experiment results</h2><span id="run-label">NO RUN YET</span></div>
+      <div class="metrics">
+        <article class="metric"><span>Net simulated P&amp;L</span><strong id="pnl">—</strong><small>Realized + unrealized</small></article>
+        <article class="metric"><span>Max drawdown</span><strong id="drawdown">—</strong><small>Absolute dollar decline</small></article>
+        <article class="metric"><span>Closed trades</span><strong id="trade-count">—</strong><small id="win-rate">Win rate unavailable</small></article>
+        <article class="metric"><span>Simulated costs</span><strong id="costs">—</strong><small>Commission + slippage</small></article>
+      </div>
+      <section class="panel chart-panel"><div class="panel-heading"><div><h2>Cumulative P&amp;L</h2><p id="dataset-description" class="hint">Your results will appear here after a backtest.</p></div><span class="chart-key">● &nbsp; SIMULATED USD</span></div>
+        <div id="chart-empty" class="empty"><span class="empty-icon">⌁</span><h3>Start with a reproducible sample</h3><p>Run 1,500 synthetic bars through the existing<br>strategy, risk checks, and backtest engine.</p></div>
+        <svg id="chart" viewBox="0 0 800 260" role="img" aria-label="Cumulative simulated profit and loss over processed bars" hidden></svg>
+        <div class="chart-footer"><span id="range">No dataset processed</span><span id="cycles">— cycles</span></div>
+      </section>
+      <div id="warnings" class="notice"><strong>Research, with context.</strong><p>Synthetic results are a software demonstration, not evidence of profitability. No real or paper broker orders are sent.</p></div>
+    </div>
+  </div>
+  <section class="panel trades" id="trades"><div class="panel-heading"><div><h2>Closed trades</h2><p class="hint">Simulated accounting from order intents, not broker fills. All times UTC.</p></div><div class="downloads"><button id="download-csv" disabled>↓ Trades CSV</button><button id="download-json" disabled>↓ Run JSON</button></div></div>
+    <div class="table-scroll"><table><thead><tr><th>Symbol</th><th>Entry time</th><th>Exit time</th><th>Quantity</th><th>Entry / exit price</th><th>Net P&amp;L</th><th>Exit reason</th></tr></thead><tbody id="trade-rows"><tr><td colspan="7" class="table-empty">No experiment yet. Run a backtest to inspect its trades.</td></tr></tbody></table></div>
+  </section>
+  <section class="panel risk" id="risk"><div class="panel-heading"><div><h2>Risk decisions</h2><p class="hint">Includes HOLD signals, which correctly produce no order.</p></div><span id="reconciliation">Awaiting results</span></div><div id="risk-reasons" class="risk-reasons"><p class="hint">The existing risk gate evaluates each signal before simulation.</p></div></section>
+  <footer>TRADEOS V3 <span>Results stay in this tab. Download a run to keep it before refreshing.</span></footer>
+</main>
+</body></html>
