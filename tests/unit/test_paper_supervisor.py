@@ -98,6 +98,17 @@ def test_dirty_reconciliation_blocks(paper):
     broker.submit_order.assert_not_called()
 
 
+@pytest.mark.parametrize('symbol,source', [('COP', 'alpaca_paper'), ('AAPL', 'alpaca_paper_short')])
+def test_unmanaged_or_short_position_blocks(paper, symbol, source):
+    p, broker, _ = paper
+    from tradeos.domain.models import Position
+    account = broker.get_account.return_value
+    broker.get_account.return_value = replace(account, positions=[Position(symbol, D(1), D(100), D(100), D(0), source)])
+    with pytest.raises(ValueError, match='Unmanaged or short'):
+        p.check(evaluate=True, submit=True)
+    broker.submit_order.assert_not_called()
+
+
 def test_partial_fills_are_cumulative_and_idempotent(paper):
     p, broker, _ = paper
     p.check(evaluate=True, submit=True)
