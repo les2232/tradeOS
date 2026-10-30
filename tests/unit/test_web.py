@@ -100,7 +100,8 @@ def test_page_and_assets(client):
     response = client.get("/")
     assert response.status_code == 200
     assert b"Research desk" in response.data
-    assert b"OFFLINE ONLY" in response.data
+    assert b"RESEARCH + PAPER" in response.data
+    assert b"Evaluate once" in response.data
     assert "default-src 'self'" in response.headers["Content-Security-Policy"]
     assert client.get("/static/dashboard.js").status_code == 200
     assert client.get("/static/dashboard.css").status_code == 200

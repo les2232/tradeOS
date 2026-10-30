@@ -13,11 +13,29 @@
   <a class="nav active" href="#workspace"><span>◫</span> Research desk</a>
   <a class="nav" href="#trades"><span>≡</span> Closed trades</a>
   <a class="nav" href="#risk"><span>◇</span> Risk decisions</a>
-  <div class="rail-bottom"><span class="dot"></span> Offline engine<p>Simulated execution only.<br>No broker connection.</p></div>
+  <div class="rail-bottom"><span class="dot"></span> Offline engine<p>Simulated execution only.<br>Paper console below.</p></div>
 </aside>
 <main id="workspace">
-  <header><span class="breadcrumb">WORKSPACE <span>/</span> RESEARCH</span><span class="badge">● &nbsp; OFFLINE ONLY</span></header>
+  <header><span class="breadcrumb">WORKSPACE <span>/</span> RESEARCH</span><span class="badge">● &nbsp; RESEARCH + PAPER</span></header>
   <section class="intro"><div><p class="eyebrow">TEST AN IDEA. INSPECT THE EVIDENCE.</p><h1>Research desk</h1><p>Explore a strategy before drawing conclusions.</p></div><span class="version">TRADEOS / 003</span></section>
+  <section class="panel" id="paper-console">
+    <h2>Alpaca PAPER trading · supervised</h2>
+    <p>Uses real market data and your configured strategy and risk limits. Starts idle. Synthetic research below never submits broker orders.</p>
+    <p>Stop prevents new submissions; an in-flight request may complete. Pending DAY orders and existing positions remain at Alpaca. Manage them in the Alpaca paper console. Sessions never resume after restart.</p>
+    <label>Evaluation interval (seconds)<input id="paper-interval" type="number" min="5" max="3600" value="60"></label>
+    <label>Session evaluation limit<input id="paper-cycles" type="number" min="1" max="100" value="5"></label>
+    <label><input id="paper-confirm" type="checkbox"> I authorize this bounded session to submit PAPER orders</label>
+    <button data-paper="check">Check connection / account</button>
+    <button data-paper="evaluate">Evaluate once · no orders</button>
+    <button data-paper="start">Start PAPER session</button>
+    <button data-paper="stop">Stop session</button>
+    <a href="/api/paper/history" download="paper-journal.json">Download persistent PAPER journal</a>
+    <p id="paper-message" role="status"></p>
+    <p>Account change is equity versus prior close. Unrealized P&amp;L is broker supplied; realized P&amp;L unavailable. Orders show cumulative fills by broker order ID. All timestamps UTC; configured risk hours are UTC.</p>
+    <p id="paper-summary" role="status">Idle · no broker request made</p>
+    <div class="table-scroll"><table><thead><tr><th>Symbol</th><th>Decision</th><th>Strategy reason</th><th>Risk / execution</th></tr></thead><tbody id="paper-decisions"></tbody></table></div>
+    <details><summary>Account, freshness, orders, cumulative fills, positions and session details</summary><pre id="paper-state">Idle</pre></details>
+  </section>
   <div class="workspace-grid">
     <section class="panel setup"><div class="panel-heading"><h2>Experiment setup</h2><span>01</span></div>
       <form id="experiment">

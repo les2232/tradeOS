@@ -141,3 +141,51 @@ byId("download-csv").addEventListener("click", () => {
   const rows = [fields, ...latestRun.trades.map(trade => fields.map(field => trade[field]))];
   download(rows.map(row => row.map(escape).join(",")).join("\r\n"), "text/csv", "tradeos-simulated-trades.csv");
 });
+
+// Paper state is displayed as text, including broker-provided symbols/reasons.
+async function refreshPaper() {
+  const response = await fetch('/api/paper');
+  const state = await response.json();
+  document.getElementById('paper-state').textContent = JSON.stringify(state, null, 2);
+  const account = state.account || {};
+  document.getElementById('paper-summary').textContent = [
+    'PAPER · ' + state.state, 'Connection: ' + (state.connection || 'unchecked'),
+    'Market: ' + (state.market || 'unchecked'), 'Data: ' + (state.data || 'unchecked'),
+    'Strategy: ' + (state.strategy || 'configured on server'),
+    'Equity: ' + (account.equity || '—'), 'Daily change: ' + (state.daily_equity_change || '—'),
+    'Unrealized P&L: ' + (state.unrealized_pnl || '—'), state.error || ''
+  ].filter(Boolean).join(' | ');
+  const rows = document.getElementById('paper-decisions');
+  rows.replaceChildren();
+  for (const decision of state.decisions || []) {
+    const row = document.createElement('tr');
+    for (const value of [decision.signal.symbol, decision.signal.action === 'hold' ? 'no trade' : decision.signal.action,
+      decision.signal.reason, decision.reason + ' / ' + decision.risk_decision.reason + ' ' + decision.risk_decision.blocked_rules.join(', ')]) {
+      const cell = document.createElement('td'); cell.textContent = value.replaceAll('_', ' '); row.append(cell);
+    }
+    rows.append(row);
+  }
+}
+document.querySelectorAll('[data-paper]').forEach(button => {
+  button.addEventListener('click', async () => {
+    const action = button.dataset.paper;
+    const message = document.getElementById('paper-message');
+    if (action === 'start' && !document.getElementById('paper-confirm').checked) {
+      message.textContent = 'Confirm PAPER order submission before starting.'; return;
+    }
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/paper/' + action, {
+        method: 'POST', headers: {'Content-Type': 'application/json', 'X-TradeOS-Request': 'paper'},
+        body: JSON.stringify({interval: Number(document.getElementById('paper-interval').value), cycles: Number(document.getElementById('paper-cycles').value), confirm_paper_orders: document.getElementById('paper-confirm').checked})
+      });
+      const result = await response.json();
+      message.textContent = result.error || ('Paper ' + action + ' requested.');
+      if (action === 'start') document.getElementById('paper-confirm').checked = false;
+      await refreshPaper();
+    } catch (_) { message.textContent = 'Connection error. Check server status; an in-flight paper order may still complete.'; }
+    finally { button.disabled = false; }
+  });
+});
+setInterval(() => refreshPaper().catch(() => {}), 3000);
+refreshPaper().catch(() => {});

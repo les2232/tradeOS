@@ -36,8 +36,8 @@ Displayed dollars are rounded; JSON preserves Decimal precision.
 
 The dashboard invokes the existing BacktestRunner with FakeBroker and the
 existing risk settings, with end-of-window flattening just like the CLI.
-Threshold inputs are percentages: 0.5% maps to the engine's 0.005. No broker
-credentials are read and there is no order-submission endpoint. The synthetic
+Threshold inputs are percentages: 0.5% maps to the engine's 0.005. The offline backtest endpoint never reads broker credentials or submits orders.
+The separate PAPER console below has explicit submission controls. The synthetic
 generator is shared with the existing CLI script. Its 15-minute series is
 synthetic and does not model exchange sessions or market calendars.
 
@@ -57,11 +57,9 @@ startup. The offline CSV loader is now included, and `/data/` ignores generated
 datasets without hiding Python source. CSV input is validated and sorted by
 UTC timestamp and symbol; malformed and duplicate bars reject the dataset.
 
-**Known gap:** `tradeos/data/alpaca_market_data.py` is absent from this repository.
-Historical downloads and paper live commands below require recovering and
-testing that adapter. Installing `alpaca-py` alone does not fix the missing
-source. Offline commands do not load it. No connected broker execution was
-validated. Synthetic results demonstrate software behavior, not trading efficacy.
+The Alpaca market-data adapter is now included and optional dependencies remain
+lazy-loaded. Connected broker execution has not been validated with credentials.
+Synthetic results demonstrate software behavior, not trading efficacy.
 
 For a credential-free offline demo, install the project and generate synthetic
 data, then run the existing backtest:
@@ -80,7 +78,7 @@ TradeOS V3 now has safe offline contracts for configuration, domain models, stra
 - Alpaca historical-data and paper-broker adapters are lazy-loaded only when requested.
 - No real-money live trading command exists yet.
 - A paper-safe live loop exists for one bounded pass through configured symbols.
-- Paper live mode is bounded to one pass unless a future scheduler is added.
+- The browser paper supervisor supports bounded sessions; CLI mode remains one pass.
 - Strategy code generates signals only.
 - RiskManager is the final gate before an order intent can be created.
 - Reconciliation blocks execution when broker and local state differ.
@@ -226,3 +224,76 @@ python -m tradeos.main --config config/paper.yaml --backtest-csv data/sample_mul
 8. Add risk rules as the final gate before execution.
 9. Build execution interfaces, order lifecycle handling, and idempotent fill processing.
 10. Create backtest/live parity tests before enabling any live behavior.
+
+## Supervised browser PAPER workflow
+
+```bash
+cd /workspaces/tradeOS
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev,web,paper]"
+python -m pytest tests/unit
+python -m tradeos.web.app --config config/paper.yaml --host 0.0.0.0 --port 8000
+```
+
+Before launching, set `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` to **paper-account**
+credentials using Codespaces secrets, then restart the Codespace to expose them
+to the server. Alternatively, enter them privately in your terminal using
+`read -rsp "Paper API key: " ALPACA_API_KEY; echo` and
+`read -rsp "Paper secret: " ALPACA_SECRET_KEY; echo`, then
+`export ALPACA_API_KEY ALPACA_SECRET_KEY`. Never put secrets in source or chat.
+No custom trading endpoint is accepted; the SDK uses its paper endpoint only.
+
+Open Ports → 8000 → Open in Browser, keeping the port **Private**. This is a
+single-process private development server, not a public authenticated service.
+Start with a dedicated, flat paper account with no pending orders. Click
+**Check connection / account**, then **Evaluate once · no orders**. Inspect the
+strategy reasons, risk rejections and account details. Select an interval
+(5–3600 seconds) and evaluation limit (1–100), check the PAPER authorization
+box, then click **Start PAPER session**. Start is the explicit submission action.
+The session runs its first evaluation immediately and stops on a blocking error.
+Only one session/server may own the ledger; no session resumes after restart.
+
+Data uses the configured watchlist, timeframe and IEX/SIP feed entitlement.
+Only completed bars are evaluated. Freshness is measured from **bar close**,
+using `data.max_bar_age_seconds`; with the default 15Min / 120-second setting,
+most evaluations between closes safely report stale data. Start shortly after a
+quarter-hour close, or deliberately configure a larger freshness allowance if
+appropriate. Market-closed and missing-data states never submit orders. Risk
+hours in the existing configuration are **UTC**, including its early 15:30
+entry cutoff and 15:55 force-flatten rule. Review these settings and the default
+mean-reversion thresholds before running; this milestone does not tune them.
+Force-flatten only runs during an active evaluation with valid data: it is not a
+guaranteed scheduled liquidation, and stopping leaves positions exposed.
+
+**Stop session** prevents subsequent submissions and interrupts interval waits.
+A request already in flight may complete. Pending DAY orders are not canceled
+and positions are not liquidated. Check/manage both in the Alpaca paper console.
+Stop does not wait for a stalled broker request; do not start another session
+until the current one has ended. Use Check afterward to refresh broker fills.
+
+`data/paper.sqlite3` persists cycle events, sessions, client-order claims,
+order observations and reconciled position quantities. Download the persistent
+PAPER journal to review across restarts. Keep this database with its account;
+do not delete it to bypass a reconciliation block. The supervisor queries known
+orders by client ID, applies cumulative filled quantities once, and compares
+resulting local quantities to the broker before allowing execution. Partial
+fills, rejected, canceled and expired orders remain visible. Existing positions
+not explained by this ledger, manual account changes, account switches, or
+unresolved submissions block trading. Resolve discrepancies in the paper
+account and inspect the journal; automatic adoption/reset is intentionally absent.
+A timed-out submission is never blindly retried. Pending orders anywhere in the
+paper account block further submissions. There is at most one new order per
+evaluation and one attempt per symbol/bar across restarts.
+
+Account equity, buying power, broker unrealized P&L and equity change since prior
+close are displayed. Realized P&L is explicitly unavailable; equity change is not
+labeled realized profit. The existing RiskManager runs before submission; an
+additional account-equity daily-loss guard includes realized losses. Journal
+fills are cumulative observations per broker order ID, not additive executions.
+Broker visibility refreshes during checks/evaluations, not by a background stream.
+
+Automated tests use mocks; SDK contract tests additionally exercise installed
+Alpaca request models without network calls. Credentials, feed entitlement,
+real broker fills and broker-connected restart recovery remain unverified until
+your first supervised paper session. No real-money execution is enabled here.
