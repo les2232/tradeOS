@@ -143,17 +143,6 @@ python -m tradeos.main --config config/momentum_test.yaml --paper-live-once
 The loop loads recent historical bars first so strategies have enough SMA
 context before evaluating the latest live bar.
 
-## Paper GUI
-
-Launch the desktop paper console from the project directory:
-
-```bash
-python -m tradeos.dashboard.app
-```
-
-Use **Check Signals** for the default no-submit pass. The paper-submit button
-stays disabled until you explicitly enable it in the GUI.
-
 By default, this does not submit paper orders. To allow paper order submission, use the explicit opt-in flag:
 
 ```bash
