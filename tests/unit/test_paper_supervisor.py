@@ -35,6 +35,10 @@ def paper(tmp_path, monkeypatch):
     return supervisor, broker, feed
 
 
+def begin(p, interval, cycles):
+    return p.start(interval, cycles)
+
+
 def test_idle_and_no_submit(paper):
     p, broker, _ = paper
     assert p.view()['state'] == 'idle'
@@ -222,9 +226,9 @@ class StaleActiveReadSupervisor(PaperSupervisor):
     def active(self, value):
         self._active = value
 
-    def _run(self, interval, cycles):
+    def _run(self, *args):
         try:
-            super()._run(interval, cycles)
+            super()._run(*args)
         finally:
             self.run_done.set()
 
@@ -274,3 +278,37 @@ def test_concurrent_view_and_stop_during_session(paper):
     view = p.view()
     assert view['active'] is False
     assert view['state'] == 'stopped'
+
+
+class StopOnFirstHook:
+    """Calls stop() at whichever start-gap hook runs first: clearing a shared event, or creating the thread."""
+
+    def __init__(self, supervisor, real_thread):
+        self.supervisor, self.real_thread, self.fired = supervisor, real_thread, False
+
+    def fire(self):
+        if not self.fired:
+            self.fired = True
+            self.supervisor.stop()
+
+    def clear(self):  # stands in for a shared stop event that start() clears after activation
+        self.fire()
+        self.flag.clear()
+
+    def thread(self, *args, **kwargs):
+        self.fire()
+        return self.real_thread(*args, **kwargs)
+
+
+def test_stop_during_start_gap_prevents_submission(paper, monkeypatch):
+    p, broker, _ = paper
+    hook = StopOnFirstHook(p, threading.Thread)
+    if hasattr(p, 'stop_event'):
+        hook.flag = p.stop_event
+        p.stop_event = NS(set=hook.flag.set, clear=hook.clear, is_set=hook.flag.is_set, wait=hook.flag.wait)
+    monkeypatch.setattr('tradeos.web.paper.Thread', hook.thread)
+    begin(p, 5, 1)
+    p.thread.join(timeout=5)
+    assert hook.fired
+    broker.submit_order.assert_not_called()
+    assert p.view()['state'] == 'stopped'

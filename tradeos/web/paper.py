@@ -35,9 +35,10 @@ class PaperSupervisor:
     def __init__(self, config_path, db_path="data/paper.sqlite3", factory=None):
         self.config_path, self.path, self.factory = config_path, Path(db_path), factory
         # lock serializes checks/sessions and is held across broker calls. status_lock guards
-        # status/active only and is never held across I/O or while acquiring lock.
-        self.lock, self.status_lock, self.stop_event = Lock(), Lock(), Event()
-        self.active = False
+        # status/active/session only and is never held across I/O or while acquiring lock.
+        self.lock, self.status_lock = Lock(), Lock()
+        # Each session owns its stop event, created when it is activated and never cleared.
+        self.active, self.session = False, None
         self.thread = None
         self.status = {"mode": "ALPACA PAPER ONLY", "state": "idle", "decisions": [], "realized_pnl": None}
         self.broker = self.feed = None
@@ -121,7 +122,8 @@ class PaperSupervisor:
         value = json.loads(row[0]) if row else None
         return value.get(key, default) if key in {"positions", "orders"} and value else (default if value is None else value)
 
-    def check(self, evaluate=False, submit=False):
+    def check(self, evaluate=False, submit=False, session=None):
+        stop = session["stop"] if session else Event()
         with self.lock:
             try:
                 self._connect()
@@ -166,7 +168,7 @@ class PaperSupervisor:
                         self.status["decisions"].append(decision)
                     if not submit or not result.order_intent or not result.execution_allowed or submitted_this_evaluation:
                         continue
-                    if self.stop_event.is_set():
+                    if stop.is_set():
                         break
                     _, current_local, daily = self._snapshot()
                     if (datetime.now(UTC) - bar.timestamp - duration(bar.timeframe)).total_seconds() > self.config.data.max_bar_age_seconds:
@@ -197,7 +199,7 @@ class PaperSupervisor:
                     self.events.append_event("paper_submission_attempt", symbol, order)
                     # Claim is durable before network access. Exceptions are never retried.
                     intent = replace(result.order_intent, metadata=dict(result.order_intent.metadata, client_order_id=client_id))
-                    if self.stop_event.is_set():
+                    if stop.is_set():
                         # Claim remains consumed; no order was sent. Never retry the same bar.
                         raise ValueError("Session stopped before submission; paper order was not sent")
                     if (datetime.now(UTC) - bar.timestamp - duration(bar.timeframe)).total_seconds() > self.config.data.max_bar_age_seconds:
@@ -230,36 +232,39 @@ class PaperSupervisor:
             with self.status_lock:
                 if self.active:
                     raise ValueError("A paper session is already active")
-                self.active = True
-                self.status.update(state="running", session_id=str(uuid4()), interval=interval, limit=cycles, completed=0)
-            self.stop_event.clear()
-            self.thread = Thread(target=self._run, args=(interval, cycles), daemon=True)
+                # A Stop can only target a session once it exists, so nothing can erase it.
+                session = {"id": str(uuid4()), "stop": Event()}
+                self.active, self.session = True, session
+                self.status.update(state="running", session_id=session["id"], interval=interval, limit=cycles, completed=0)
+            self.thread = Thread(target=self._run, args=(session, interval, cycles), daemon=True)
             self.thread.start()
         return self.view()
 
-    def _run(self, interval, cycles):
+    def _run(self, session, interval, cycles):
+        stop = session["stop"]
         try:
             for index in range(cycles):
-                if self.stop_event.is_set():
+                if stop.is_set():
                     break
-                self.check(evaluate=True, submit=True)
+                self.check(evaluate=True, submit=True, session=session)
                 self._set(self.status, completed=index + 1)
-                if index + 1 < cycles and self.stop_event.wait(interval):
+                if index + 1 < cycles and stop.wait(interval):
                     break
         except ValueError:
             pass
         finally:
             with self.status_lock:
-                self.active = False
+                self.active, self.session = False, None
                 if self.status["state"] != "blocked":
                     self.status["state"] = "stopped"
             if hasattr(self, "events"):
                 self.events.append_event("paper_session_ended", "", self.view())
 
     def stop(self):
-        self.stop_event.set()
         # Read active and write state together so a session ending concurrently can't leave "stopping".
         with self.status_lock:
+            if self.session:
+                self.session["stop"].set()
             self.status["state"] = "stopping" if self.active else "stopped"
         return self.view()
 
