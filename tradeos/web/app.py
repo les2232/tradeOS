@@ -28,6 +28,13 @@ def create_app(config_path: str | Path = "config/paper.yaml", *, paper_superviso
         response.headers["Content-Disposition"] = 'attachment; filename="paper-journal.json"'
         return response
 
+    @app.get("/api/paper/session")
+    def paper_session_preview():
+        try:
+            return jsonify(paper.session_preview(request.args.get("interval", type=int), request.args.get("cycles", type=int)))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
     @app.post("/api/paper/<action>")
     def paper_action(action):
         if request.headers.get("X-TradeOS-Request") != "paper" or not request.is_json:
@@ -41,7 +48,7 @@ def create_app(config_path: str | Path = "config/paper.yaml", *, paper_superviso
             elif action == "start":
                 if payload.get("confirm_paper_orders") is not True:
                     raise ValueError("Explicit paper order confirmation required")
-                result = paper.start(payload.get("interval", 60), payload.get("cycles", 5))
+                result = paper.start(payload.get("interval", 60), payload.get("cycles", 5), payload.get("session_fingerprint"))
             elif action in {"check", "evaluate"}:
                 if paper.active:
                     raise ValueError("Stop the active session before a manual check")

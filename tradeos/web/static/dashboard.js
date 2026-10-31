@@ -166,22 +166,51 @@ async function refreshPaper() {
     rows.append(row);
   }
 }
+// Start sends back the fingerprint of the exact settings shown here; the server
+// rejects it if config changed since, so the confirmed session is the one that runs.
+let paperFingerprint = null;
+const paperInputs = () => ({interval: Number(document.getElementById('paper-interval').value), cycles: Number(document.getElementById('paper-cycles').value)});
+async function previewPaperSession() {
+  const confirm = document.getElementById('paper-confirm');
+  const panel = document.getElementById('paper-session');
+  paperFingerprint = null;
+  if (!confirm.checked) { panel.textContent = 'Tick the authorization box to review the exact Automatic PAPER session settings.'; return; }
+  const {interval, cycles} = paperInputs();
+  const response = await fetch(`/api/paper/session?interval=${interval}&cycles=${cycles}`);
+  const result = await response.json();
+  if (result.error) { confirm.checked = false; panel.textContent = result.error; return; }
+  const s = result.session, r = s.risk;
+  panel.textContent = [
+    s.label, 'Account: ' + s.account_id, 'Watchlist: ' + s.watchlist.join(', ') + ' · ' + s.timeframe,
+    'Strategy: ' + s.strategy.strategy_mode,
+    'Risk: max position $' + r.max_position_value + ' · max open positions ' + r.max_open_positions + ' · max daily loss $' + r.max_daily_loss + ' · shorting ' + (r.allow_shorting ? 'on' : 'off'),
+    'Entries (UTC): ' + r.entry_start_time + '–' + r.entry_end_time + ' · no entry after ' + r.no_entry_after + ' · flatten at ' + r.force_flatten_at,
+    'Max bar age: ' + s.data.max_bar_age_seconds + ' s',
+    'Every ' + s.interval_seconds + ' s · max evaluations ' + s.max_evaluations + ' · max possible orders ' + s.max_possible_orders
+  ].join('\n');
+  paperFingerprint = result.fingerprint;
+}
+document.getElementById('paper-confirm').addEventListener('change', () => previewPaperSession().catch(() => {}));
+for (const id of ['paper-interval', 'paper-cycles']) {
+  // Changed inputs need a fresh review before Start.
+  document.getElementById(id).addEventListener('input', () => { document.getElementById('paper-confirm').checked = false; previewPaperSession().catch(() => {}); });
+}
 document.querySelectorAll('[data-paper]').forEach(button => {
   button.addEventListener('click', async () => {
     const action = button.dataset.paper;
     const message = document.getElementById('paper-message');
-    if (action === 'start' && !document.getElementById('paper-confirm').checked) {
-      message.textContent = 'Confirm PAPER order submission before starting.'; return;
+    if (action === 'start' && (!document.getElementById('paper-confirm').checked || !paperFingerprint)) {
+      message.textContent = 'Confirm PAPER order submission and review the session settings before starting.'; return;
     }
     button.disabled = true;
     try {
       const response = await fetch('/api/paper/' + action, {
         method: 'POST', headers: {'Content-Type': 'application/json', 'X-TradeOS-Request': 'paper'},
-        body: JSON.stringify({interval: Number(document.getElementById('paper-interval').value), cycles: Number(document.getElementById('paper-cycles').value), confirm_paper_orders: document.getElementById('paper-confirm').checked})
+        body: JSON.stringify({...paperInputs(), confirm_paper_orders: document.getElementById('paper-confirm').checked, session_fingerprint: paperFingerprint})
       });
       const result = await response.json();
       message.textContent = result.error || ('Paper ' + action + ' requested.');
-      if (action === 'start') document.getElementById('paper-confirm').checked = false;
+      if (action === 'start') { document.getElementById('paper-confirm').checked = false; await previewPaperSession(); }
       await refreshPaper();
     } catch (_) { message.textContent = 'Connection error. Check server status; an in-flight paper order may still complete.'; }
     finally { button.disabled = false; }

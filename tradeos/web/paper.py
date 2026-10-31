@@ -41,6 +41,10 @@ def serial(value):
     return json.loads(json.dumps(value, default=lambda v: asdict(v) if hasattr(v, "__dataclass_fields__") else str(v)))
 
 
+def fingerprint(snapshot):
+    return hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+
+
 class PaperSupervisor:
     def __init__(self, config_path, db_path="data/paper.sqlite3", factory=None):
         self.config_path, self.path, self.factory = config_path, Path(db_path), factory
@@ -54,8 +58,9 @@ class PaperSupervisor:
         self.broker = self.feed = None
         self.process_lock = None
 
-    def _connect(self):
-        config = load_config(self.config_path)
+    def _connect(self, config=None):
+        # A session passes its frozen config; manual checks read the file each time.
+        config = config or load_config(self.config_path)
         _validate_paper_runtime(config, True)
         if config.risk.allow_shorting:
             raise ValueError("Supervised paper workflow requires allow_shorting: false")
@@ -158,7 +163,7 @@ class PaperSupervisor:
         stop = session["stop"] if session else Event()
         with self.lock:
             try:
-                self._connect()
+                self._connect(session["config"] if session else None)
                 account, local, daily = self._snapshot()
                 clock = self.broker.client.get_clock()
                 self._set(self.status, connection="connected", market="open" if clock.is_open else "closed", checked_at=datetime.now(UTC).isoformat())
@@ -275,17 +280,49 @@ class PaperSupervisor:
                     self.events.append_event("paper_blocked", "", {"reason": error})
                 raise ValueError(error) from None
 
-    def start(self, interval, cycles):
+    def _session_settings(self, interval, cycles):
+        """Load and validate config once, returning it with the snapshot the operator confirms."""
         if type(interval) is not int or not 5 <= interval <= 3600 or type(cycles) is not int or not 1 <= cycles <= 100:
             raise ValueError("Interval must be 5–3600 seconds; session limit 1–100 evaluations")
+        config = load_config(self.config_path)
+        _validate_paper_runtime(config, True)
+        if config.risk.allow_shorting:
+            raise ValueError("Supervised paper workflow requires allow_shorting: false")
+        try:
+            account_id = self._get("account_id") if self.path.exists() else None
+        except sqlite3.OperationalError:
+            account_id = None
+        if not account_id:
+            raise ValueError("Run Check first so the session is bound to a paper account")
+        # At most one order per evaluation, so evaluations bound the number of orders.
+        snapshot = serial({"label": "Automatic PAPER session", "account_id": account_id, "watchlist": config.symbols, "timeframe": config.timeframe, "strategy": config.strategy, "risk": config.risk, "data": config.data, "interval_seconds": interval, "max_evaluations": cycles, "max_possible_orders": cycles})
+        return config, snapshot
+
+    def session_preview(self, interval, cycles):
+        _, snapshot = self._session_settings(interval, cycles)
+        return {"session": snapshot, "fingerprint": fingerprint(snapshot)}
+
+    def start(self, interval, cycles, confirmed_fingerprint):
         with self.lock:
             with self.status_lock:
                 if self.active:
                     raise ValueError("A paper session is already active")
+            try:
+                config, snapshot = self._session_settings(interval, cycles)
+                if confirmed_fingerprint != fingerprint(snapshot):
+                    raise ValueError("Session settings changed since they were shown; review the Automatic PAPER session and confirm again")
+                self._connect(config)
+            except ValueError:
+                raise
+            except Exception as exc:
+                raise ValueError(f"{type(exc).__name__}: paper start blocked; inspect server log/account") from None
+            # The session runs entirely from this frozen config, never rereading the file.
+            session = {"id": str(uuid4()), "stop": Event(), "config": config}
+            self.events.append_event("paper_session_started", "", {"session_id": session["id"], "fingerprint": fingerprint(snapshot), "session": snapshot})
+            with self.status_lock:
                 # A Stop can only target a session once it exists, so nothing can erase it.
-                session = {"id": str(uuid4()), "stop": Event()}
                 self.active, self.session = True, session
-                self.status.update(state="running", session_id=session["id"], interval=interval, limit=cycles, completed=0)
+                self.status.update(state="running", session_id=session["id"], interval=interval, limit=cycles, completed=0, session_config=snapshot)
             self.thread = Thread(target=self._run, args=(session, interval, cycles), daemon=True)
             self.thread.start()
         return self.view()
@@ -298,7 +335,7 @@ class PaperSupervisor:
                     break
                 self.check(evaluate=True, submit=True, session=session)
                 self._set(self.status, completed=index + 1)
-                if index + 1 < cycles and stop.wait(interval):
+                if index + 1 < cycles and self._pause(stop, interval):
                     break
         except ValueError:
             pass
@@ -309,6 +346,10 @@ class PaperSupervisor:
                     self.status["state"] = "stopped"
             if hasattr(self, "events"):
                 self.events.append_event("paper_session_ended", "", self.view())
+
+    def _pause(self, stop, seconds):
+        """Wait between evaluations; True when stopped."""
+        return stop.wait(seconds)
 
     def stop(self):
         # Read active and write state together so a session ending concurrently can't leave "stopping".

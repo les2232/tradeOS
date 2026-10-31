@@ -36,7 +36,9 @@ def paper(tmp_path, monkeypatch):
 
 
 def begin(p, interval, cycles):
-    return p.start(interval, cycles)
+    """Check (binding the account), preview, then start with the previewed fingerprint, as the UI does."""
+    p.check()
+    return p.start(interval, cycles, p.session_preview(interval, cycles)['fingerprint'])
 
 
 def test_idle_and_no_submit(paper):
@@ -129,10 +131,10 @@ def test_partial_fills_are_cumulative_and_idempotent(paper):
 def test_start_stop_and_bounds(paper):
     p, broker, _ = paper
     with pytest.raises(ValueError):
-        p.start(0, 1)
-    p.start(60, 2)
+        begin(p, 0, 1)
+    begin(p, 60, 2)
     with pytest.raises(ValueError, match='already active'):
-        p.start(60, 2)
+        begin(p, 60, 2)
     p.stop()
     p.thread.join(timeout=3)
     assert not p.active
@@ -197,7 +199,7 @@ def test_daily_equity_loss_blocks_submission(paper):
 
 def test_session_limit_finishes_without_resume(paper):
     p, _, _ = paper
-    p.start(5, 1)
+    begin(p, 5, 1)
     p.thread.join(timeout=3)
     assert not p.active
     assert p.view()['completed'] == 1
@@ -238,7 +240,7 @@ def test_stop_racing_session_end_never_leaves_stopping(paper):
     racy = StaleActiveReadSupervisor('unused', p.path, lambda _: (broker, feed))
     bars = feed.recent_bars.return_value
     feed.recent_bars.side_effect = lambda *a, **kw: racy.release.wait(5) and bars
-    racy.start(5, 1)
+    begin(racy, 5, 1)
     racy.armed = True
     racy.stop()
     racy.thread.join(timeout=5)
@@ -265,7 +267,7 @@ def test_concurrent_view_and_stop_during_session(paper):
         except Exception as exc:  # surfaced below; threads swallow assertion errors
             errors.append(exc)
 
-    p.start(5, 3)
+    begin(p, 5, 3)
     assert in_check.wait(5)
     threads = [threading.Thread(target=hammer, args=(50 * n,)) for n in range(6)]
     for thread in threads:
@@ -421,3 +423,51 @@ def test_broker_id_conflict_rolls_back_ledger_json(paper):
     order = only_order(p)
     assert order['submission'] == 'sending'
     assert 'broker_order_id' not in order
+
+
+def test_session_uses_frozen_config_after_disk_change(paper, monkeypatch):
+    p, broker, feed = paper
+    import tradeos.web.paper as module
+    original = module.load_config('unused')
+    edited = replace(original, symbols=['MSFT'], risk=replace(original.risk, max_daily_loss=D(1)))
+    bars = feed.recent_bars.return_value
+
+    def edit_config_after_first_evaluation(*args, **kwargs):
+        monkeypatch.setattr('tradeos.web.paper.load_config', lambda _: edited)
+        return bars
+
+    feed.recent_bars.side_effect = edit_config_after_first_evaluation
+    p._pause = lambda stop, seconds: stop.is_set()
+    begin(p, 5, 2)
+    p.thread.join(timeout=10)
+    view = p.view()
+    assert (view['state'], view['completed']) == ('stopped', 2), view.get('error')
+    assert feed.recent_bars.call_count == 2
+    assert p.config.symbols == ['AAPL'] and p.config.risk.max_daily_loss == original.risk.max_daily_loss
+    started = [e for e in p.history() if e['event_type'] == 'paper_session_started']
+    assert started[0]['payload']['session']['risk']['max_daily_loss'] == str(original.risk.max_daily_loss)
+
+
+def test_start_rejects_settings_changed_since_preview(paper, monkeypatch):
+    p, broker, _ = paper
+    import tradeos.web.paper as module
+    original = module.load_config('unused')
+    p.check()
+    shown = p.session_preview(5, 1)
+    assert shown['session']['label'] == 'Automatic PAPER session'
+    assert shown['session']['max_possible_orders'] == 1
+    monkeypatch.setattr('tradeos.web.paper.load_config', lambda _: replace(original, risk=replace(original.risk, max_daily_loss=D(1))))
+    with pytest.raises(ValueError, match='changed since they were shown'):
+        p.start(5, 1, shown['fingerprint'])
+    assert not p.active
+    broker.submit_order.assert_not_called()
+
+
+def test_session_preview_route(paper):
+    p, _, _ = paper
+    client = create_app(paper_supervisor=p).test_client()
+    assert 'Run Check first' in client.get('/api/paper/session?interval=60&cycles=5').json['error']
+    p.check()
+    preview = client.get('/api/paper/session?interval=60&cycles=5').json
+    assert preview['session']['account_id'] == 'paper-account' and len(preview['fingerprint']) == 64
+    assert client.get('/api/paper/session?interval=1&cycles=5').status_code == 400

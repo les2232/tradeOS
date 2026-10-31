@@ -37,6 +37,8 @@ def test_supervised_browser_workflow(paper):
             page.locator('[data-paper="start"]').click()
             expect(page.locator('#paper-message')).to_contain_text('Confirm PAPER')
             page.locator('#paper-confirm').check()
+            expect(page.locator('#paper-session')).to_contain_text('Automatic PAPER session')
+            expect(page.locator('#paper-session')).to_contain_text('max possible orders 5')
             page.locator('[data-paper="start"]').click()
             expect(page.locator('#paper-message')).to_contain_text('requested')
             # expect() polls without eval, which the dashboard CSP (script-src 'self') blocks.
