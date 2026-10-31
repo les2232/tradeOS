@@ -312,3 +312,40 @@ def test_stop_during_start_gap_prevents_submission(paper, monkeypatch):
     assert hook.fired
     broker.submit_order.assert_not_called()
     assert p.view()['state'] == 'stopped'
+
+
+def hold_long(p, broker, monkeypatch, qty, action=TradeAction.SELL):
+    """Clean ledger and broker both long `qty` AAPL, the strategy emitting `action`, daily loss at the limit."""
+    from tradeos.domain.models import Position
+    p.check()
+    p._put('reconciled', {'positions': {'AAPL': str(qty)}, 'orders': {}})
+    positions = [Position('AAPL', D(qty), D(100), D(100) * qty, D(0), 'alpaca_paper')] if qty else []
+    broker.get_account.return_value = replace(broker.get_account.return_value, positions=positions)
+    broker.get_positions.return_value = positions
+    broker.client.get_account.return_value.last_equity = '11000'
+    monkeypatch.setattr('tradeos.web.paper.MeanReversionStrategy.generate_signal', lambda self, bar, config, **kw: Signal(bar.symbol, action, StrategyMode.MEAN_REVERSION, bar.timestamp, 'test exit', D(1)))
+
+
+def test_daily_loss_blocks_buy(paper, monkeypatch):
+    p, broker, _ = paper
+    hold_long(p, broker, monkeypatch, 0, TradeAction.BUY)
+    p.check(evaluate=True, submit=True)
+    broker.submit_order.assert_not_called()
+    assert 'Daily account equity loss' in p.view()['decisions'][0]['reason']
+
+
+def test_daily_loss_allows_reducing_sell(paper, monkeypatch):
+    p, broker, _ = paper
+    hold_long(p, broker, monkeypatch, 10)
+    p.check(evaluate=True, submit=True)
+    assert broker.submit_order.call_count == 1
+    intent = broker.submit_order.call_args.args[0]
+    assert (str(intent.side), intent.quantity) == ('sell', D(10))
+
+
+@pytest.mark.parametrize('side,qty,long_qty,pending,allowed', [
+    ('sell', 10, 10, 0, True), ('sell', 4, 10, 6, True), ('sell', 10, 10, 1, False),
+    ('sell', 11, 10, 0, False), ('sell', 1, 0, 0, False), ('sell', 0, 10, 0, False), ('buy', 1, 10, 0, False)])
+def test_daily_loss_blocks_sell_exceeding_available_long(side, qty, long_qty, pending, allowed):
+    from tradeos.web.paper import reduces_exposure
+    assert reduces_exposure(NS(side=side, quantity=D(qty)), D(long_qty), D(pending)) is allowed

@@ -27,6 +27,11 @@ def enum_value(value):
     return str(getattr(value, "value", value))
 
 
+def reduces_exposure(intent, long_qty, pending_sell_qty):
+    """True only for a sell that shrinks an existing long net of pending sells, so it can never go short."""
+    return enum_value(intent.side) == "sell" and Decimal(0) < intent.quantity <= long_qty - pending_sell_qty
+
+
 def serial(value):
     return json.loads(json.dumps(value, default=lambda v: asdict(v) if hasattr(v, "__dataclass_fields__") else str(v)))
 
@@ -180,11 +185,15 @@ class PaperSupervisor:
                     if not result.execution_allowed or not result.order_intent:
                         self._set(decision, **serial(result))
                         continue
-                    if self.broker.get_open_orders():
+                    open_orders = self.broker.get_open_orders()
+                    if open_orders:
                         self._set(decision, reason="Pending orders block further submissions")
                         continue
-                    if daily <= -self.config.risk.max_daily_loss:
-                        self._set(decision, reason="Daily account equity loss limit blocks submission")
+                    # At the loss limit only validated exposure-reducing sells may still go out.
+                    long_qty = sum((p.quantity for p in current_local if p.symbol == symbol), Decimal(0))
+                    pending_sells = sum((o.quantity for o in open_orders if o.symbol == symbol and enum_value(o.side) == "sell"), Decimal(0))
+                    if daily <= -self.config.risk.max_daily_loss and not reduces_exposure(result.order_intent, long_qty, pending_sells):
+                        self._set(decision, reason="Daily account equity loss limit blocks submission; only exposure-reducing sells are allowed")
                         continue
                     claim = hashlib.sha256(f"{symbol}:{bar.timestamp.isoformat()}:{bar.timeframe}".encode()).hexdigest()[:32]
                     if self._get("claim:" + claim):
