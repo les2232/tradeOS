@@ -24,6 +24,7 @@
     <p>Stop prevents new submissions; an in-flight request may complete. Pending DAY orders and existing positions remain at Alpaca. Manage them in the Alpaca paper console. Sessions never resume after restart.</p>
     <label>Evaluation interval (seconds)<input id="paper-interval" type="number" min="5" max="3600" value="60"></label>
     <label>Session evaluation limit<input id="paper-cycles" type="number" min="1" max="100" value="5"></label>
+    <label>Maximum session minutes (ends at market close if sooner)<input id="paper-minutes" type="number" min="1" max="390" value="60"></label>
     <label><input id="paper-confirm" type="checkbox"> I authorize this bounded session to submit PAPER orders</label>
     <pre id="paper-session" aria-live="polite">Run Check, then tick the authorization box to review the exact Automatic PAPER session settings.</pre>
     <button data-paper="check">Check connection / account</button>

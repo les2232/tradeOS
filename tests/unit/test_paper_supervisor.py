@@ -27,7 +27,7 @@ def paper(tmp_path, monkeypatch):
     timestamp = datetime.now(UTC) - timedelta(minutes=15, seconds=2)
     feed.recent_bars.return_value = [Bar('AAPL', timestamp - timedelta(minutes=15*i), D(100), D(101), D(99), D(100), D(100), '15Min', DataQualityStatus.OK) for i in range(55)][::-1]
     monkeypatch.setattr('tradeos.web.paper.MeanReversionStrategy.generate_signal', lambda self, bar, config, **kw: Signal(bar.symbol, TradeAction.BUY, StrategyMode.MEAN_REVERSION, bar.timestamp, 'test opportunity', D(1)))
-    broker.client.get_clock.return_value = NS(is_open=True)
+    broker.client.get_clock.return_value = NS(is_open=True, next_close=datetime.now(UTC) + timedelta(hours=6))
     broker.client.get_order_by_client_id.return_value = NS(id='broker-1', filled_qty='0', filled_avg_price=None, status='rejected')
     from tradeos.domain.models import OrderSubmission
     broker.submit_order.return_value = OrderSubmission("broker-1", "AAPL", "buy", D(10), "submitted", datetime.now(UTC))
@@ -35,10 +35,10 @@ def paper(tmp_path, monkeypatch):
     return supervisor, broker, feed
 
 
-def begin(p, interval, cycles):
+def begin(p, interval, cycles, minutes=60):
     """Check (binding the account), preview, then start with the previewed fingerprint, as the UI does."""
     p.check()
-    return p.start(interval, cycles, p.session_preview(interval, cycles)['fingerprint'])
+    return p.start(interval, cycles, minutes, p.session_preview(interval, cycles, minutes)['fingerprint'])
 
 
 def test_idle_and_no_submit(paper):
@@ -453,12 +453,12 @@ def test_start_rejects_settings_changed_since_preview(paper, monkeypatch):
     import tradeos.web.paper as module
     original = module.load_config('unused')
     p.check()
-    shown = p.session_preview(5, 1)
+    shown = p.session_preview(5, 1, 60)
     assert shown['session']['label'] == 'Automatic PAPER session'
     assert shown['session']['max_possible_orders'] == 1
     monkeypatch.setattr('tradeos.web.paper.load_config', lambda _: replace(original, risk=replace(original.risk, max_daily_loss=D(1))))
     with pytest.raises(ValueError, match='changed since they were shown'):
-        p.start(5, 1, shown['fingerprint'])
+        p.start(5, 1, 60, shown['fingerprint'])
     assert not p.active
     broker.submit_order.assert_not_called()
 
@@ -466,8 +466,72 @@ def test_start_rejects_settings_changed_since_preview(paper, monkeypatch):
 def test_session_preview_route(paper):
     p, _, _ = paper
     client = create_app(paper_supervisor=p).test_client()
-    assert 'Run Check first' in client.get('/api/paper/session?interval=60&cycles=5').json['error']
+    assert 'Run Check first' in client.get('/api/paper/session?interval=60&cycles=5&max_minutes=60').json['error']
     p.check()
-    preview = client.get('/api/paper/session?interval=60&cycles=5').json
+    preview = client.get('/api/paper/session?interval=60&cycles=5&max_minutes=60').json
     assert preview['session']['account_id'] == 'paper-account' and len(preview['fingerprint']) == 64
-    assert client.get('/api/paper/session?interval=1&cycles=5').status_code == 400
+    assert client.get('/api/paper/session?interval=1&cycles=5&max_minutes=60').status_code == 400
+    assert client.get('/api/paper/session?interval=60&cycles=5&max_minutes=391').status_code == 400
+
+
+def advance_clock_after_each_session_check(p, by):
+    """Real time until a session evaluation finishes, then `by` later, so freshness checks see real time."""
+    clock = {'offset': timedelta(0)}
+    p._now = lambda: datetime.now(UTC) + clock['offset']
+    real_check = p.check
+
+    def check_then_advance(*args, **kwargs):
+        try:
+            return real_check(*args, **kwargs)
+        finally:
+            if kwargs.get('session'):
+                clock['offset'] += by
+
+    p.check = check_then_advance
+    p._pause = lambda stop, seconds: stop.is_set()
+
+
+def test_session_ends_at_wall_clock_cap(paper):
+    p, broker, feed = paper
+    advance_clock_after_each_session_check(p, timedelta(minutes=2))
+    begin(p, 5, 3, minutes=1)
+    p.thread.join(timeout=5)
+    view = p.view()
+    assert (view['state'], view['completed'], view['deadline_reason']) == ('stopped', 1, 'time limit')
+    assert view['ended_reason'] == 'Session reached its time limit'
+    assert feed.recent_bars.call_count == 1
+
+
+@pytest.mark.parametrize('zone,minutes_to_close,reason', [('Asia/Tokyo', 10, 'market close'), ('America/New_York', 90, 'time limit')])
+def test_session_deadline_compares_non_utc_next_close(paper, zone, minutes_to_close, reason):
+    # Comparing wall-clock times would pick the wrong deadline in both zones.
+    from zoneinfo import ZoneInfo
+    p, broker, feed = paper
+    close = (datetime.now(UTC) + timedelta(minutes=minutes_to_close)).astimezone(ZoneInfo(zone))
+    broker.client.get_clock.return_value = NS(is_open=True, next_close=close)
+    advance_clock_after_each_session_check(p, timedelta(hours=2))
+    begin(p, 5, 3, minutes=60)
+    p.thread.join(timeout=5)
+    view = p.view()
+    assert view['deadline_reason'] == reason
+    if reason == 'market close':
+        assert datetime.fromisoformat(view['deadline']) == close
+    assert view['ended_reason'] == 'Session reached its ' + reason
+    assert feed.recent_bars.call_count == 1
+
+
+def test_start_rejected_when_market_closed(paper):
+    p, broker, _ = paper
+    broker.client.get_clock.return_value.is_open = False
+    with pytest.raises(ValueError, match='Market is closed'):
+        begin(p, 5, 1)
+    assert not p.active and p.thread is None
+    broker.submit_order.assert_not_called()
+
+
+def test_start_rejects_naive_next_close(paper):
+    p, broker, _ = paper
+    broker.client.get_clock.return_value.next_close = datetime.now() + timedelta(hours=1)
+    with pytest.raises(ValueError, match='timezone-aware'):
+        begin(p, 5, 1)
+    assert not p.active

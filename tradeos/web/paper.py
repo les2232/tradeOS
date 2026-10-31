@@ -1,6 +1,6 @@
 """Bounded, opt-in paper supervision. No session resumes after process restart."""
 from dataclasses import asdict, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import hashlib
 import json
@@ -173,7 +173,7 @@ class PaperSupervisor:
                     self._set(self.status, data="market_closed", decisions=[])
                     return self.view()
                 bars = self.feed.recent_bars(self.config.symbols, self.config.timeframe, _required_history_count(self.config) + 2)
-                now = datetime.now(UTC)
+                now = self._now()
                 latest = {}
                 seen = set()
                 for bar in sorted(bars, key=lambda b: (b.timestamp, b.symbol)):
@@ -208,7 +208,7 @@ class PaperSupervisor:
                     if stop.is_set():
                         break
                     _, current_local, daily = self._snapshot()
-                    if (datetime.now(UTC) - bar.timestamp - duration(bar.timeframe)).total_seconds() > self.config.data.max_bar_age_seconds:
+                    if (self._now() - bar.timestamp - duration(bar.timeframe)).total_seconds() > self.config.data.max_bar_age_seconds:
                         raise ValueError("Data became stale before submission")
                     if not self.broker.client.get_clock().is_open:
                         raise ValueError("Market closed before submission")
@@ -240,13 +240,14 @@ class PaperSupervisor:
                     # Claim is durable before network access and stays consumed in every outcome:
                     # a bar is attempted at most once and exceptions are never retried.
                     intent = replace(result.order_intent, metadata=dict(result.order_intent.metadata, client_order_id=client_id))
-                    if stop.is_set():
+                    abort = "Session stopped" if stop.is_set() else "Session reached its end time" if session and self._now() >= session["deadline"] else None
+                    if abort:
                         order["submission"] = "not_sent"
                         self._save_ledger(ledger)
-                        self._set(decision, reason="Session stopped before submission; paper order was not sent")
+                        self._set(decision, reason=abort + " before submission; paper order was not sent")
                         self.events.append_event("paper_submission_not_sent", symbol, order)
                         break
-                    if (datetime.now(UTC) - bar.timestamp - duration(bar.timeframe)).total_seconds() > self.config.data.max_bar_age_seconds:
+                    if (self._now() - bar.timestamp - duration(bar.timeframe)).total_seconds() > self.config.data.max_bar_age_seconds:
                         order["submission"] = "not_sent"
                         self._save_ledger(ledger)
                         raise ValueError("Data became stale before submission; paper order was not sent")
@@ -280,10 +281,15 @@ class PaperSupervisor:
                     self.events.append_event("paper_blocked", "", {"reason": error})
                 raise ValueError(error) from None
 
-    def _session_settings(self, interval, cycles):
+    def _now(self):
+        return datetime.now(UTC)
+
+    def _session_settings(self, interval, cycles, max_minutes):
         """Load and validate config once, returning it with the snapshot the operator confirms."""
         if type(interval) is not int or not 5 <= interval <= 3600 or type(cycles) is not int or not 1 <= cycles <= 100:
             raise ValueError("Interval must be 5–3600 seconds; session limit 1–100 evaluations")
+        if type(max_minutes) is not int or not 1 <= max_minutes <= 390:
+            raise ValueError("Maximum session duration must be 1–390 minutes")
         config = load_config(self.config_path)
         _validate_paper_runtime(config, True)
         if config.risk.allow_shorting:
@@ -295,34 +301,43 @@ class PaperSupervisor:
         if not account_id:
             raise ValueError("Run Check first so the session is bound to a paper account")
         # At most one order per evaluation, so evaluations bound the number of orders.
-        snapshot = serial({"label": "Automatic PAPER session", "account_id": account_id, "watchlist": config.symbols, "timeframe": config.timeframe, "strategy": config.strategy, "risk": config.risk, "data": config.data, "interval_seconds": interval, "max_evaluations": cycles, "max_possible_orders": cycles})
+        snapshot = serial({"label": "Automatic PAPER session", "account_id": account_id, "watchlist": config.symbols, "timeframe": config.timeframe, "strategy": config.strategy, "risk": config.risk, "data": config.data, "interval_seconds": interval, "max_evaluations": cycles, "max_possible_orders": cycles, "max_duration_minutes": max_minutes, "ends_at_market_close": True})
         return config, snapshot
 
-    def session_preview(self, interval, cycles):
-        _, snapshot = self._session_settings(interval, cycles)
+    def session_preview(self, interval, cycles, max_minutes):
+        _, snapshot = self._session_settings(interval, cycles, max_minutes)
         return {"session": snapshot, "fingerprint": fingerprint(snapshot)}
 
-    def start(self, interval, cycles, confirmed_fingerprint):
+    def start(self, interval, cycles, max_minutes, confirmed_fingerprint):
         with self.lock:
             with self.status_lock:
                 if self.active:
                     raise ValueError("A paper session is already active")
             try:
-                config, snapshot = self._session_settings(interval, cycles)
+                config, snapshot = self._session_settings(interval, cycles, max_minutes)
                 if confirmed_fingerprint != fingerprint(snapshot):
                     raise ValueError("Session settings changed since they were shown; review the Automatic PAPER session and confirm again")
                 self._connect(config)
+                clock = self.broker.client.get_clock()
+                if not clock.is_open:
+                    raise ValueError("Market is closed; a PAPER session can only start while it is open")
+                close = clock.next_close
+                if not isinstance(close, datetime) or close.utcoffset() is None:
+                    raise ValueError("Broker clock next_close must be timezone-aware")
+                # Both sides are aware datetimes, so the comparison is correct across time zones.
+                cap, close = self._now() + timedelta(minutes=max_minutes), close.astimezone(UTC)
+                deadline, deadline_reason = (close, "market close") if close <= cap else (cap, "time limit")
             except ValueError:
                 raise
             except Exception as exc:
                 raise ValueError(f"{type(exc).__name__}: paper start blocked; inspect server log/account") from None
             # The session runs entirely from this frozen config, never rereading the file.
-            session = {"id": str(uuid4()), "stop": Event(), "config": config}
-            self.events.append_event("paper_session_started", "", {"session_id": session["id"], "fingerprint": fingerprint(snapshot), "session": snapshot})
+            session = {"id": str(uuid4()), "stop": Event(), "config": config, "deadline": deadline, "deadline_reason": deadline_reason}
+            self.events.append_event("paper_session_started", "", {"session_id": session["id"], "fingerprint": fingerprint(snapshot), "session": snapshot, "deadline": deadline.isoformat(), "deadline_reason": deadline_reason})
             with self.status_lock:
                 # A Stop can only target a session once it exists, so nothing can erase it.
                 self.active, self.session = True, session
-                self.status.update(state="running", session_id=session["id"], interval=interval, limit=cycles, completed=0, session_config=snapshot)
+                self.status.update(state="running", session_id=session["id"], interval=interval, limit=cycles, completed=0, session_config=snapshot, deadline=deadline.isoformat(), deadline_reason=deadline_reason, ended_reason=None)
             self.thread = Thread(target=self._run, args=(session, interval, cycles), daemon=True)
             self.thread.start()
         return self.view()
@@ -333,9 +348,13 @@ class PaperSupervisor:
             for index in range(cycles):
                 if stop.is_set():
                     break
+                if self._now() >= session["deadline"]:
+                    self._set(self.status, ended_reason="Session reached its " + session["deadline_reason"])
+                    break
                 self.check(evaluate=True, submit=True, session=session)
                 self._set(self.status, completed=index + 1)
-                if index + 1 < cycles and self._pause(stop, interval):
+                remaining = (session["deadline"] - self._now()).total_seconds()
+                if index + 1 < cycles and remaining > 0 and self._pause(stop, min(interval, remaining)):
                     break
         except ValueError:
             pass

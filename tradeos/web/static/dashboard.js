@@ -169,14 +169,14 @@ async function refreshPaper() {
 // Start sends back the fingerprint of the exact settings shown here; the server
 // rejects it if config changed since, so the confirmed session is the one that runs.
 let paperFingerprint = null;
-const paperInputs = () => ({interval: Number(document.getElementById('paper-interval').value), cycles: Number(document.getElementById('paper-cycles').value)});
+const paperInputs = () => ({interval: Number(document.getElementById('paper-interval').value), cycles: Number(document.getElementById('paper-cycles').value), max_minutes: Number(document.getElementById('paper-minutes').value)});
 async function previewPaperSession() {
   const confirm = document.getElementById('paper-confirm');
   const panel = document.getElementById('paper-session');
   paperFingerprint = null;
   if (!confirm.checked) { panel.textContent = 'Tick the authorization box to review the exact Automatic PAPER session settings.'; return; }
-  const {interval, cycles} = paperInputs();
-  const response = await fetch(`/api/paper/session?interval=${interval}&cycles=${cycles}`);
+  const {interval, cycles, max_minutes} = paperInputs();
+  const response = await fetch(`/api/paper/session?interval=${interval}&cycles=${cycles}&max_minutes=${max_minutes}`);
   const result = await response.json();
   if (result.error) { confirm.checked = false; panel.textContent = result.error; return; }
   const s = result.session, r = s.risk;
@@ -186,12 +186,13 @@ async function previewPaperSession() {
     'Risk: max position $' + r.max_position_value + ' · max open positions ' + r.max_open_positions + ' · max daily loss $' + r.max_daily_loss + ' · shorting ' + (r.allow_shorting ? 'on' : 'off'),
     'Entries (UTC): ' + r.entry_start_time + '–' + r.entry_end_time + ' · no entry after ' + r.no_entry_after + ' · flatten at ' + r.force_flatten_at,
     'Max bar age: ' + s.data.max_bar_age_seconds + ' s',
-    'Every ' + s.interval_seconds + ' s · max evaluations ' + s.max_evaluations + ' · max possible orders ' + s.max_possible_orders
+    'Every ' + s.interval_seconds + ' s · max evaluations ' + s.max_evaluations + ' · max possible orders ' + s.max_possible_orders,
+    'Ends after ' + s.max_duration_minutes + ' min or at market close, whichever comes first'
   ].join('\n');
   paperFingerprint = result.fingerprint;
 }
 document.getElementById('paper-confirm').addEventListener('change', () => previewPaperSession().catch(() => {}));
-for (const id of ['paper-interval', 'paper-cycles']) {
+for (const id of ['paper-interval', 'paper-cycles', 'paper-minutes']) {
   // Changed inputs need a fresh review before Start.
   document.getElementById(id).addEventListener('input', () => { document.getElementById('paper-confirm').checked = false; previewPaperSession().catch(() => {}); });
 }
