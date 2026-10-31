@@ -245,10 +245,22 @@ single-process private development server, not a public authenticated service.
 Start with a dedicated, flat paper account with no pending orders. Click
 **Check connection / account**, then **Evaluate once · no orders**. Inspect the
 strategy reasons, risk rejections and account details. Select an interval
-(5–3600 seconds) and evaluation limit (1–100), check the PAPER authorization
-box, then click **Start PAPER session**. Start is the explicit submission action.
+(5–3600 seconds), evaluation limit (1–100) and maximum duration (1–390 minutes),
+then check the PAPER authorization box. The dashboard shows the exact
+**Automatic PAPER session** settings that will run: account, watchlist, strategy,
+risk limits, interval, evaluations and max possible orders (one per evaluation).
+Click **Start PAPER session**; Start is the explicit submission action.
+Start is refused while the market is closed, and refused if the config changed
+since the settings were shown. The session runs entirely from that frozen
+snapshot (journaled as `paper_session_started`), never rereading the config file.
+It ends at the earlier of the maximum duration and the broker's next market close.
 The session runs its first evaluation immediately and stops on a blocking error.
 Only one session/server may own the ledger; no session resumes after restart.
+
+The process lock covers one ledger path (`data/paper.sqlite3` by default), not
+the broker account. Two servers using different ledger files against the same
+paper account are not detected by the lock, so keep exactly one canonical ledger
+per account.
 
 Data uses the configured watchlist, timeframe and IEX/SIP feed entitlement.
 Only completed bars are evaluated. Freshness is measured from **bar close**,
@@ -278,6 +290,13 @@ fills, rejected, canceled and expired orders remain visible. Existing positions
 not explained by this ledger, manual account changes, account switches, or
 unresolved submissions block trading. Resolve discrepancies in the paper
 account and inspect the journal; automatic adoption/reset is intentionally absent.
+Each order record tracks its submission: `claimed`, then `not_sent` (aborted by
+Stop, the session end time or stale data before the broker call) or `sending`
+(saved just before the call), then `accepted` or `submission_uncertain`.
+Reconciliation queries the broker for every order except `claimed`/`not_sent`,
+which never reached it. An order the broker can't confirm blocks with a message
+naming its `client_order_id`; resolve it in the paper console. Broker order ids are
+unique per ledger and written in the same transaction as the ledger.
 A timed-out submission is never blindly retried. Pending orders anywhere in the
 paper account block further submissions. There is at most one new order per
 evaluation and one attempt per symbol/bar across restarts.
@@ -285,7 +304,9 @@ evaluation and one attempt per symbol/bar across restarts.
 Account equity, buying power, broker unrealized P&L and equity change since prior
 close are displayed. Realized P&L is explicitly unavailable; equity change is not
 labeled realized profit. The existing RiskManager runs before submission; an
-additional account-equity daily-loss guard includes realized losses. Journal
+additional account-equity daily-loss guard includes realized losses. At that limit
+only exposure-reducing sells (at most the reconciled long minus pending sells) may
+still be submitted; buys stay blocked and no sell can create a short. Journal
 fills are cumulative observations per broker order ID, not additive executions.
 Broker visibility refreshes during checks/evaluations, not by a background stream.
 
