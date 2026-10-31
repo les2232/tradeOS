@@ -349,3 +349,75 @@ def test_daily_loss_allows_reducing_sell(paper, monkeypatch):
 def test_daily_loss_blocks_sell_exceeding_available_long(side, qty, long_qty, pending, allowed):
     from tradeos.web.paper import reduces_exposure
     assert reduces_exposure(NS(side=side, quantity=D(qty)), D(long_qty), D(pending)) is allowed
+
+
+def only_order(p):
+    (order,) = p._get('orders').values()
+    return order
+
+
+def test_stop_before_send_marks_not_sent_and_reconciles_clean(paper, monkeypatch):
+    p, broker, _ = paper
+    from tradeos.storage.sqlite import SQLiteEventStore
+    real_append = SQLiteEventStore.append_event
+
+    def stop_after_claim(store, event_type, *args, **kwargs):
+        real_append(store, event_type, *args, **kwargs)
+        if event_type == 'paper_submission_attempt':
+            p.stop()
+
+    monkeypatch.setattr(SQLiteEventStore, 'append_event', stop_after_claim)
+    begin(p, 5, 1)
+    p.thread.join(timeout=5)
+    broker.submit_order.assert_not_called()
+    broker.client.get_order_by_client_id.reset_mock()
+    broker.client.get_order_by_client_id.side_effect = LookupError('order not found')
+    p.check()
+    broker.client.get_order_by_client_id.assert_not_called()
+    assert p.view()['reconciliation'] == 'clean'
+    assert only_order(p)['submission'] == 'not_sent'
+
+
+def test_send_error_stays_uncertain_and_blocks(paper):
+    p, broker, _ = paper
+    broker.submit_order.side_effect = ConnectionError('reset mid-request')
+    with pytest.raises(ValueError):
+        p.check(evaluate=True, submit=True)
+    assert only_order(p)['submission'] == 'submission_uncertain'
+    broker.client.get_order_by_client_id.side_effect = LookupError('order not found')
+    with pytest.raises(ValueError, match='resolve it manually'):
+        p.check()
+
+
+def test_crash_left_sending_blocks_with_manual_resolution(paper):
+    p, broker, _ = paper
+    p.check()
+    order = {'symbol': 'AAPL', 'side': 'buy', 'submission': 'sending', 'status': 'not_submitted', 'filled_qty': '0', 'client_order_id': 'tos-crashed'}
+    p._put('reconciled', {'positions': {}, 'orders': {'tos-crashed': order}})
+    broker.client.get_order_by_client_id.side_effect = LookupError('order not found')
+    with pytest.raises(ValueError, match='tos-crashed is sending .* resolve it manually'):
+        p.check()
+    broker.submit_order.assert_not_called()
+
+
+def test_duplicate_broker_order_id_blocks(paper):
+    p, broker, _ = paper
+    p.check()
+    earlier = {'symbol': 'AAPL', 'side': 'buy', 'submission': 'accepted', 'status': 'rejected', 'filled_qty': '0', 'client_order_id': 'tos-earlier', 'broker_order_id': 'broker-1'}
+    p._put('reconciled', {'positions': {}, 'orders': {'tos-earlier': earlier}})
+    with pytest.raises(ValueError, match='broker-1 .* conflicts with another recorded order'):
+        p.check(evaluate=True, submit=True)
+
+
+def test_broker_id_conflict_rolls_back_ledger_json(paper):
+    import sqlite3
+    p, broker, _ = paper
+    p.check()
+    with sqlite3.connect(p.path) as db:
+        db.execute("CREATE TABLE IF NOT EXISTS paper_broker_orders (broker_order_id TEXT PRIMARY KEY, client_order_id TEXT NOT NULL UNIQUE)")
+        db.execute("INSERT INTO paper_broker_orders VALUES ('broker-1', 'tos-other')")
+    with pytest.raises(ValueError, match='conflicts'):
+        p.check(evaluate=True, submit=True)
+    order = only_order(p)
+    assert order['submission'] == 'sending'
+    assert 'broker_order_id' not in order

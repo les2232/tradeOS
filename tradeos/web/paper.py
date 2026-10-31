@@ -23,6 +23,11 @@ from tradeos.strategy.mean_reversion import MeanReversionStrategy
 from tradeos.strategy.momentum_breakout import MomentumBreakoutStrategy
 
 
+# Local submission lifecycle: claimed -> not_sent | sending -> accepted | submission_uncertain.
+# claimed/not_sent never reached the broker because "sending" is persisted before the call.
+NEVER_SENT = {"claimed", "not_sent"}
+
+
 def enum_value(value):
     return str(getattr(value, "value", value))
 
@@ -68,6 +73,7 @@ class PaperSupervisor:
         self.events.initialize()
         with sqlite3.connect(self.path) as db:
             db.execute("CREATE TABLE IF NOT EXISTS paper_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS paper_broker_orders (broker_order_id TEXT PRIMARY KEY, client_order_id TEXT NOT NULL UNIQUE)")
         if self.broker is None:
             if self.factory:
                 self.broker, self.feed = self.factory(config)
@@ -85,6 +91,20 @@ class PaperSupervisor:
         with sqlite3.connect(self.path) as db:
             db.execute("INSERT OR REPLACE INTO paper_state VALUES (?,?)", (key, json.dumps(serial(value))))
 
+    def _save_ledger(self, ledger, claim=None):
+        # The claim, JSON ledger and broker order id index commit together or not at all.
+        with sqlite3.connect(self.path) as db:
+            if claim:
+                db.execute("INSERT OR REPLACE INTO paper_state VALUES (?,?)", ("claim:" + claim, "true"))
+            db.execute("INSERT OR REPLACE INTO paper_state VALUES (?,?)", ("reconciled", json.dumps(serial(ledger))))
+            for client_id, order in ledger["orders"].items():
+                broker_id = order.get("broker_order_id")
+                if not broker_id:
+                    continue
+                db.execute("INSERT OR IGNORE INTO paper_broker_orders VALUES (?,?)", (broker_id, client_id))
+                if not db.execute("SELECT 1 FROM paper_broker_orders WHERE broker_order_id=? AND client_order_id=?", (broker_id, client_id)).fetchone():
+                    raise ValueError(f"Broker order id {broker_id} for {client_id} conflicts with another recorded order; resolve manually before continuing")
+
     def _set(self, target, **fields):
         with self.status_lock:
             target.update(fields)
@@ -100,7 +120,14 @@ class PaperSupervisor:
         expected = self._get("positions", {})
         orders = self._get("orders", {})
         for client_id, order in orders.items():
-            response = self.broker.client.get_order_by_client_id(client_id)
+            # Records from before lifecycle tracking are treated as uncertain, as they were then.
+            state = order.get("submission", "submission_uncertain")
+            if state in NEVER_SENT:
+                continue
+            try:
+                response = self.broker.client.get_order_by_client_id(client_id)
+            except Exception:
+                raise ValueError(f"Paper order {client_id} is {state} and the broker could not confirm it; resolve it manually in the Alpaca paper console before continuing") from None
             qty = Decimal(str(response.filled_qty or 0))
             prior = Decimal(order.get("filled_qty", "0"))
             if qty < prior:
@@ -108,10 +135,10 @@ class PaperSupervisor:
             delta = qty - prior
             symbol = order["symbol"]
             expected[symbol] = str(Decimal(expected.get(symbol, "0")) + (delta if order["side"] == "buy" else -delta))
-            order.update(broker_order_id=str(response.id), filled_qty=str(qty), filled_avg_price=str(response.filled_avg_price), status=enum_value(response.status))
+            order.update(submission="accepted", broker_order_id=str(response.id), filled_qty=str(qty), filled_avg_price=str(response.filled_avg_price), status=enum_value(response.status))
             self.events.append_event("paper_order_observed", symbol, dict(order, client_order_id=client_id))
         # Persist quantities and cumulative fills together, preventing double application.
-        self._put("reconciled", {"positions": expected, "orders": orders})
+        self._save_ledger({"positions": expected, "orders": orders})
         local = [Position(s, Decimal(q), Decimal(0), Decimal(0), Decimal(0), "paper_ledger") for s, q in expected.items()]
         reconciliation = ReconciliationService().reconcile(positions, local)
         if not reconciliation.execution_allowed:
@@ -200,20 +227,34 @@ class PaperSupervisor:
                         self._set(decision, reason="Duplicate bar: order already attempted")
                         continue
                     client_id = "tos-" + claim
-                    order = {"symbol": symbol, "side": str(result.order_intent.side), "status": "submission_uncertain", "filled_qty": "0", "client_order_id": client_id}
-                    self._put("claim:" + claim, True)
+                    order = {"symbol": symbol, "side": str(result.order_intent.side), "submission": "claimed", "status": "not_submitted", "filled_qty": "0", "client_order_id": client_id}
                     ledger = self._get("reconciled", {"positions": {}, "orders": {}})
                     ledger["orders"][client_id] = order
-                    self._put("reconciled", ledger)
+                    self._save_ledger(ledger, claim=claim)
                     self.events.append_event("paper_submission_attempt", symbol, order)
-                    # Claim is durable before network access. Exceptions are never retried.
+                    # Claim is durable before network access and stays consumed in every outcome:
+                    # a bar is attempted at most once and exceptions are never retried.
                     intent = replace(result.order_intent, metadata=dict(result.order_intent.metadata, client_order_id=client_id))
                     if stop.is_set():
-                        # Claim remains consumed; no order was sent. Never retry the same bar.
-                        raise ValueError("Session stopped before submission; paper order was not sent")
+                        order["submission"] = "not_sent"
+                        self._save_ledger(ledger)
+                        self._set(decision, reason="Session stopped before submission; paper order was not sent")
+                        self.events.append_event("paper_submission_not_sent", symbol, order)
+                        break
                     if (datetime.now(UTC) - bar.timestamp - duration(bar.timeframe)).total_seconds() > self.config.data.max_bar_age_seconds:
-                        raise ValueError("Data became stale before submission; order claim retained")
-                    submission = self.broker.submit_order(intent)
+                        order["submission"] = "not_sent"
+                        self._save_ledger(ledger)
+                        raise ValueError("Data became stale before submission; paper order was not sent")
+                    order["submission"] = "sending"
+                    self._save_ledger(ledger)
+                    try:
+                        submission = self.broker.submit_order(intent)
+                    except Exception:
+                        order["submission"] = "submission_uncertain"
+                        self._save_ledger(ledger)
+                        raise
+                    order.update(submission="accepted", broker_order_id=submission.broker_order_id or None, status=enum_value(submission.status))
+                    self._save_ledger(ledger)
                     self._set(decision, order_submission=serial(submission))
                     self.events.append_event("paper_submission_response", symbol, serial(submission))
                     # One submission per evaluation avoids decisions based on stale account state.
