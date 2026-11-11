@@ -76,9 +76,10 @@ def web(supervised, tmp_path, monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     broker.reset_mock()
     memory = tmp_path / "experiments.jsonl"
-    ResearchMemory(memory).save_result(experiment(symbols=("AAPL",)))
+    # Differs from config/paper.yaml only in its entry threshold.
+    ResearchMemory(memory).save_result(experiment(symbols=("AAPL",), parameters={"entry_threshold_pct": "0.005"}))
     # Matches config/paper.yaml, which the supervised session ran with.
-    ResearchMemory(memory).save_result(experiment(symbols=("AAPL",), experiment_id="exp-paper", parameters={"entry_threshold_pct": "1.0", "exit_threshold_pct": "0.3"}))
+    ResearchMemory(memory).save_result(experiment(symbols=("AAPL",), experiment_id="exp-paper", parameters={"entry_threshold_pct": "0.01", "exit_threshold_pct": "0.003"}))
     explainers = []
 
     def factory():
@@ -107,6 +108,7 @@ def test_web_sessions_and_local_explanation(web):
     mismatched = client.post("/api/analyst/explain", json={"kind": "comparison", "experiment_id": "exp-1"}, headers=HEADERS).json["comparison"]
     assert mismatched["valid"] is False and mismatched["metrics"] is None
     assert [item["check"] for item in mismatched["checks"] if not item["ok"]] == ["parameters"]
+    assert "entry_threshold_pct: session 0.01 vs research 0.005" in next(item["detail"] for item in mismatched["checks"] if item["check"] == "parameters")
     matched = client.post("/api/analyst/explain", json={"kind": "comparison", "experiment_id": "exp-paper"}, headers=HEADERS).json["comparison"]
     assert matched["valid"] is True and matched["metrics"]["closed_trades"]["session"] == 0
     # Reading the analyst never talks to the broker.
