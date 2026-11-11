@@ -69,3 +69,23 @@ def test_event_id_is_unique() -> None:
     second = store.append_event("cycle", "AAPL", {})
 
     assert first.event_id != second.event_id
+
+
+def test_read_only_reader_returns_sequences_without_creating_files(tmp_path) -> None:
+    from tradeos.storage.sqlite import read_events_readonly
+
+    missing = tmp_path / "missing.sqlite3"
+    assert read_events_readonly(missing) == []
+    assert not missing.exists()
+
+    path = tmp_path / "events.sqlite3"
+    store = SQLiteEventStore(path)
+    store.append_event("first", "AAPL", {"index": 0})
+    store.append_event("second", "MSFT", {"index": 1})
+    events = read_events_readonly(path)
+    assert [(sequence, event.event_type) for sequence, event in events] == [(1, "first"), (2, "second")]
+
+    import sqlite3
+    empty = tmp_path / "empty.sqlite3"
+    sqlite3.connect(empty).close()
+    assert read_events_readonly(empty) == []

@@ -38,7 +38,7 @@ jobs:
       - name: Install project and CI dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install ".[dev,web,paper,browser]" build
+          python -m pip install ".[dev,web,paper,browser,analyst]" build
 
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
@@ -72,6 +72,8 @@ jobs:
               "tradeos/web/templates/index.html",
               "tradeos/web/static/dashboard.css",
               "tradeos/web/static/dashboard.js",
+              "tradeos/web/static/analyst.js",
+              "tradeos/analyst/evidence.py",
               "tradeos/data/sample_dataset.py",
           }
           with ZipFile(wheels[0]) as wheel:

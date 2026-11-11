@@ -120,6 +120,35 @@ class SQLiteEventStore:
         return connection
 
 
+def read_events_readonly(db_path: str | Path) -> list[tuple[int, EventRecord]]:
+    """Return (sequence, event) pairs without creating, migrating or locking the store.
+
+    The database is opened read-only so analysis can run beside a live paper
+    session. A missing file or a database without an events table yields [].
+    """
+
+    path = Path(db_path)
+    if not path.exists():
+        return []
+    connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            """
+            SELECT sequence, event_id, event_type, timestamp, symbol, payload
+            FROM events
+            ORDER BY sequence ASC
+            """
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return []
+        raise
+    finally:
+        connection.close()
+    return [(int(row["sequence"]), _row_to_event(row)) for row in rows]
+
+
 def _row_to_event(row: sqlite3.Row) -> EventRecord:
     return EventRecord(
         event_id=row["event_id"],

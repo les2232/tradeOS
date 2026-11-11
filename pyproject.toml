@@ -20,6 +20,10 @@ paper = [
 browser = [
     "playwright>=1.55",
 ]
+# Optional: lets the session analyst ask Claude to write explanations.
+analyst = [
+    "anthropic>=2.3,<3",
+]
 
 [tool.setuptools.packages.find]
 include = ["tradeos*"]

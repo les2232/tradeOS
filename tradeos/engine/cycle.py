@@ -75,6 +75,7 @@ class TradingCycle:
             bar.symbol,
             {
                 "timeframe": bar.timeframe,
+                "bar_timestamp": bar.timestamp.isoformat(),
                 "execute_orders": self.execute_orders,
             },
         )
@@ -115,6 +116,7 @@ class TradingCycle:
                 "strategy_mode": signal.strategy_mode,
                 "reason": signal.reason,
                 "confidence": signal.confidence,
+                "metadata": signal.metadata,
             },
         )
         risk_decision = self.risk_manager.approve(signal, broker_account, risk_config)

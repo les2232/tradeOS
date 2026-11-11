@@ -5,6 +5,7 @@
   <title>TradeOS · Research desk</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
   <script src="{{ url_for('static', filename='dashboard.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='analyst.js') }}" defer></script>
 </head>
 <body>
 <aside class="rail">
@@ -13,6 +14,7 @@
   <a class="nav active" href="#workspace"><span>◫</span> Research desk</a>
   <a class="nav" href="#trades"><span>≡</span> Closed trades</a>
   <a class="nav" href="#risk"><span>◇</span> Risk decisions</a>
+  <a class="nav" href="#analyst"><span>?</span> Session analyst</a>
   <div class="rail-bottom"><span class="dot"></span> Offline engine<p>Simulated execution only.<br>Paper console below.</p></div>
 </aside>
 <main id="workspace">
@@ -37,6 +39,20 @@
     <p id="paper-summary" role="status">Idle · no broker request made</p>
     <div class="table-scroll"><table><thead><tr><th>Symbol</th><th>Decision</th><th>Strategy reason</th><th>Risk / execution</th></tr></thead><tbody id="paper-decisions"></tbody></table></div>
     <details><summary>Account, freshness, orders, cumulative fills, positions and session details</summary><pre id="paper-state">Idle</pre></details>
+  </section>
+  <section class="panel analyst" id="analyst">
+    <div class="panel-heading"><div><h2>Ask TradeOS · session analyst</h2><p class="hint">Explains recorded PAPER sessions from the event log. Every finding cites event refs (E…). Read-only: it never contacts the broker.</p></div></div>
+    <div class="analyst-controls">
+      <label>Session<select id="analyst-session"><option value="">Loading…</option></select></label>
+      <label>Question<select id="analyst-kind"><option value="session">Explain this session</option><option value="symbol">Why did a symbol buy, sell or hold?</option><option value="comparison">Can it be compared with a research result?</option></select></label>
+      <label id="analyst-symbol-field" hidden>Symbol<input id="analyst-symbol" maxlength="10" autocomplete="off"></label>
+      <label id="analyst-experiment-field" hidden>Research result<select id="analyst-experiment"></select></label>
+    </div>
+    <div class="analyst-actions"><button id="analyst-local" type="button">Explain from evidence</button> <button id="analyst-claude" type="button">Explain with Claude</button></div>
+    <p class="hint">“Explain with Claude” sends this session's evidence summary to the Anthropic API with the server's credentials. The summary has no account id, credentials or raw broker responses.</p>
+    <p id="analyst-status" role="status" aria-live="polite"></p>
+    <div id="analyst-output"></div>
+    <details><summary>Evidence package (JSON)</summary><pre id="analyst-evidence">Ask a question to build it.</pre></details>
   </section>
   <div class="workspace-grid">
     <section class="panel setup"><div class="panel-heading"><h2>Experiment setup</h2><span>01</span></div>

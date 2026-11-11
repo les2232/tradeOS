@@ -314,3 +314,54 @@ Automated tests use mocks; SDK contract tests additionally exercise installed
 Alpaca request models without network calls. Credentials, feed entitlement,
 real broker fills and broker-connected restart recovery remain unverified until
 your first supervised paper session. No real-money execution is enabled here.
+
+## Session analyst (Ask TradeOS)
+
+The **Ask TradeOS · session analyst** panel in the browser dashboard, and
+`python -m tradeos.analyst`, explain recorded PAPER sessions from
+`data/paper.sqlite3`. It answers three questions:
+
+- **Explain this session:** what the bot decided, what it sent, what filled, and why it stopped.
+- **Why did a symbol buy, sell or hold?** The recent decisions for that symbol, with
+  the strategy's own inputs (price deviation from the SMA versus the entry and
+  exit thresholds) and any risk-manager block.
+- **Can this session be compared with a research result?** Strategy, timeframe,
+  watchlist and every recorded parameter must match, the research data must not
+  be synthetic, and the research needs at least 30 trades. If any check fails,
+  no performance numbers are compared at all.
+
+```bash
+python -m tradeos.analyst sessions --db data/paper.sqlite3
+python -m tradeos.analyst explain --db data/paper.sqlite3                  # latest session
+python -m tradeos.analyst explain --symbol AAPL
+python -m tradeos.analyst explain --compare <experiment_id> --research-memory research_memory/experiments.jsonl
+```
+
+The analyst first builds an **evidence package**: deterministic counts, fills,
+FIFO-matched round trips and a list of known gaps (session still running,
+pre-submission re-checks, sells of positions opened earlier, unconfirmed
+submissions, small samples). Every statement cites the event numbers it comes
+from (`E12` is the 12th event in the log), and the session's settings are checked
+against the fingerprint you confirmed at Start. It reads the database read-only,
+so it is safe to use while a session runs, and it never contacts the broker.
+Realized P&L comes from matched fill prices before fees; unrealized changes are
+not included.
+
+**Explain with Claude** (`--claude` on the command line) also sends the evidence
+package to the Anthropic API and shows Claude's explanation, which separates
+findings from hypotheses, next to the rule-based one. The package contains no
+account id, credentials or raw broker responses. Claude's answer is checked
+against the package, and any statement citing an event that is not in it is
+removed and counted. To enable it, install the extra and provide credentials on
+the server, for example with `ant auth login` or `ANTHROPIC_API_KEY`:
+
+```bash
+python -m pip install -e ".[analyst]"
+```
+
+It uses `claude-opus-5-5` with server-side fallback, so a declined request is
+retried on Anthropic's recommended model and the panel labels the answer
+accordingly. One Claude request runs at a time per server.
+
+Cycle events now record the bar timestamp and the strategy's inputs. Events
+written before this change still load, and the analyst lists what they lack.

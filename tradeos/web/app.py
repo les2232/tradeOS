@@ -6,10 +6,17 @@ from threading import Lock
 
 from flask import Flask, jsonify, render_template, request
 
+from tradeos.web.analyst_routes import register_analyst_routes
 from tradeos.web.service import run_research
 
 
-def create_app(config_path: str | Path = "config/paper.yaml", *, paper_supervisor=None) -> Flask:
+def create_app(
+    config_path: str | Path = "config/paper.yaml",
+    *,
+    paper_supervisor=None,
+    research_memory: str | Path = "research_memory/experiments.jsonl",
+    analyst_explainer_factory=None,
+) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 2_100_000
     config_path = Path(config_path).resolve()
@@ -17,6 +24,7 @@ def create_app(config_path: str | Path = "config/paper.yaml", *, paper_superviso
     from tradeos.web.paper import PaperSupervisor
     paper = paper_supervisor or PaperSupervisor(config_path)
     app.extensions["paper"] = paper
+    register_analyst_routes(app, paper.path, research_memory, analyst_explainer_factory)
 
     @app.get("/api/paper")
     def paper_status():

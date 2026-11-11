@@ -484,3 +484,22 @@ def test_cycle_passes_history_into_strategy() -> None:
     )
 
     assert strategy.captured_history == prior_history
+
+
+def test_cycle_events_record_bar_time_and_strategy_inputs() -> None:
+    event_store = SQLiteEventStore(":memory:")
+    current_bar = bar()
+
+    TradingCycle(
+        strategy=MeanReversionStrategy(),
+        risk_manager=RiskManager(),
+        broker=FakeBroker(account()),
+        reconciliation_service=ReconciliationService(),
+        event_store=event_store,
+    ).run(current_bar, strategy_config(), risk_config(), local_positions=[])
+
+    events = {event.event_type: event for event in event_store.list_events()}
+    assert events["cycle_started"].payload["bar_timestamp"] == current_bar.timestamp.isoformat()
+    metadata = events["signal_generated"].payload["metadata"]
+    assert isinstance(metadata, dict)
+    assert all(isinstance(value, str) for value in metadata.values())
