@@ -32,8 +32,8 @@ def valid_config() -> str:
       strategy_mode: mean_reversion
       sma_bars: 20
       long_sma_bars: 50
-      entry_threshold_pct: 1.0
-      exit_threshold_pct: 0.3
+      entry_threshold_pct: 0.01
+      exit_threshold_pct: 0.003
       trend_filter_enabled: true
       max_below_long_sma_pct: 0.02
       stop_loss_enabled: true
@@ -73,6 +73,8 @@ def test_valid_paper_config_loads() -> None:
     assert config.symbols == ["AAPL", "MSFT", "NVDA"]
     assert config.strategy.strategy_mode == StrategyMode.MEAN_REVERSION
     assert config.strategy.long_sma_bars == 50
+    assert config.strategy.entry_threshold_pct == Decimal("0.01")
+    assert config.strategy.exit_threshold_pct == Decimal("0.003")
     assert config.strategy.trend_filter_enabled is True
     assert config.strategy.max_below_long_sma_pct == Decimal("0.02")
     assert config.strategy.stop_loss_enabled is True
@@ -227,5 +229,101 @@ def test_max_atr_percentile_outside_range_rejected() -> None:
         with pytest.raises(
             ValueError,
             match="strategy.max_atr_percentile must be between 0 and 100",
+        ):
+            load_config(path)
+
+
+@pytest.mark.parametrize(
+    "path", ["config/paper.yaml", "config/live.yaml", "config/momentum_test.yaml"]
+)
+def test_shipped_configs_use_fraction_thresholds(path: str) -> None:
+    strategy = load_config(Path(path)).strategy
+
+    assert strategy.entry_threshold_pct == Decimal("0.01")
+    assert strategy.exit_threshold_pct == Decimal("0.003")
+    for value in (
+        strategy.entry_threshold_pct,
+        strategy.exit_threshold_pct,
+        strategy.max_below_long_sma_pct,
+        strategy.stop_loss_pct,
+        strategy.breakout_threshold_pct,
+        strategy.momentum_exit_threshold_pct,
+        strategy.momentum_stop_loss_pct,
+    ):
+        assert Decimal("0") <= value < Decimal("0.2")
+
+
+FRACTION_FIELDS = [
+    ("entry_threshold_pct", "0.01"),
+    ("exit_threshold_pct", "0.003"),
+    ("max_below_long_sma_pct", "0.02"),
+    ("stop_loss_pct", "0.01"),
+    ("breakout_threshold_pct", "0.002"),
+    ("momentum_exit_threshold_pct", "0.001"),
+    ("momentum_stop_loss_pct", "0.01"),
+]
+
+
+@pytest.mark.parametrize("field, current", FRACTION_FIELDS)
+@pytest.mark.parametrize("bad_value", ["1.0", "0.3", "0.2", "-0.01", "-1", ".nan", ".inf"])
+def test_percent_scale_or_invalid_fraction_rejected(
+    field: str, current: str, bad_value: str
+) -> None:
+    content = valid_config().replace(
+        f"      {field}: {current}\n", f"      {field}: {bad_value}\n"
+    )
+    assert content != valid_config()
+    with written_config(content) as path:
+        with pytest.raises(ValueError) as exc:
+            load_config(path)
+
+    message = str(exc.value)
+    assert f"strategy.{field} must be a fraction" in message
+    assert "0.01 = 1%" in message
+
+
+@pytest.mark.parametrize(
+    "field, current, legacy",
+    [
+        ("entry_threshold_pct", "0.01", "1.0"),
+        ("exit_threshold_pct", "0.003", "0.3"),
+    ],
+)
+def test_legacy_percent_scale_thresholds_rejected_with_clear_message(
+    field: str, current: str, legacy: str
+) -> None:
+    with written_config(
+        valid_config().replace(f"      {field}: {current}\n", f"      {field}: {legacy}\n")
+    ) as path:
+        with pytest.raises(ValueError) as exc:
+            load_config(path)
+
+    assert str(exc.value) == (
+        f"strategy.{field} must be a fraction from 0 up to (not including) 0.2, "
+        f"where 0.01 = 1%; got {legacy}. "
+        "Percent values are not accepted: write 1% as 0.01, not 1.0."
+    )
+
+
+def test_fraction_threshold_just_below_bound_accepted() -> None:
+    with written_config(
+        valid_config()
+        .replace("      entry_threshold_pct: 0.01\n", "      entry_threshold_pct: 0.19\n")
+        .replace("      exit_threshold_pct: 0.003\n", "      exit_threshold_pct: 0\n")
+    ) as path:
+        config = load_config(path)
+
+    assert config.strategy.entry_threshold_pct == Decimal("0.19")
+    assert config.strategy.exit_threshold_pct == Decimal("0")
+
+
+def test_non_numeric_fraction_rejected() -> None:
+    with written_config(
+        valid_config().replace(
+            "      exit_threshold_pct: 0.003\n", "      exit_threshold_pct: abc\n"
+        )
+    ) as path:
+        with pytest.raises(
+            ValueError, match="strategy.exit_threshold_pct must be a decimal value"
         ):
             load_config(path)
