@@ -17,6 +17,9 @@ web = ["Flask>=3.1,<4"]
 paper = [
     "alpaca-py>=0.35",
 ]
+browser = [
+    "playwright>=1.55",
+]
 
 [tool.setuptools.packages.find]
 include = ["tradeos*"]

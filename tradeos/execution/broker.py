@@ -172,7 +172,9 @@ class AlpacaPaperBroker:
         paper: bool,
         env: Mapping[str, str] | None = None,
     ):
-        source = env or os.environ
+        if not paper:
+            raise BrokerSafetyError("AlpacaPaperBroker requires paper=True")
+        source = os.environ if env is None else env
         api_key = source.get("ALPACA_API_KEY", "")
         secret_key = source.get("ALPACA_SECRET_KEY", "")
         missing = [
@@ -209,7 +211,8 @@ class AlpacaPaperBroker:
         dependencies = _import_alpaca_trading_dependencies()
         request = dependencies["LimitOrderRequest"](
             symbol=intent.symbol,
-            qty=str(_alpaca_order_quantity(intent)),
+            client_order_id=intent.metadata.get("client_order_id"),
+            qty=str(_alpaca_order_quantity(intent).quantize(Decimal("0.000000001"), rounding="ROUND_DOWN")),
             side=_alpaca_order_side(intent.side, dependencies),
             time_in_force=dependencies["TimeInForce"].DAY,
             limit_price=float(intent.limit_price) if intent.limit_price is not None else None,
@@ -285,7 +288,8 @@ def _alpaca_order_response_to_submission(response: Any, intent: OrderIntent) -> 
     if submitted_at.tzinfo is None or submitted_at.utcoffset() is None:
         submitted_at = submitted_at.replace(tzinfo=UTC)
     broker_order_id = str(_attr(response, "id", ""))
-    raw_status = str(_attr(response, "status", "") or "")
+    status_value = _attr(response, "status", "") or ""
+    raw_status = str(getattr(status_value, "value", status_value))
     requested_quantity = _alpaca_order_quantity(intent)
     fill = None
     status = _order_status(raw_status, filled_qty)
@@ -323,6 +327,8 @@ def _alpaca_order_response_to_submission(response: Any, intent: OrderIntent) -> 
 
 def _order_status(raw_status: str, filled_qty: Decimal) -> OrderStatus:
     normalized = raw_status.lower()
+    if normalized in {"canceled", "rejected", "expired"}:
+        return OrderStatus(normalized)
     if filled_qty > Decimal("0"):
         if normalized == "partially_filled":
             return OrderStatus.PARTIALLY_FILLED
