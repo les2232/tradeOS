@@ -86,6 +86,24 @@ def _decimal(value: Any, field_name: str) -> Decimal:
         raise ValueError(f"{field_name} must be a decimal value") from exc
 
 
+# Strategy *_pct fields are fractions of price (0.01 = 1%). A value at or above
+# this bound almost certainly means a percent was written where a fraction was
+# expected (1.0 meant as 1% would require a 100% move), so it is rejected. The
+# bound sits below 0.3 so the legacy percent-scale exit value is caught too.
+MAX_FRACTION_PCT = Decimal("0.2")
+
+
+def _fraction(value: Any, field_name: str) -> Decimal:
+    parsed = _decimal(value, field_name)
+    if not parsed.is_finite() or not Decimal("0") <= parsed < MAX_FRACTION_PCT:
+        raise ValueError(
+            f"{field_name} must be a fraction from 0 up to (not including) "
+            f"{MAX_FRACTION_PCT}, where 0.01 = 1%; got {value}. "
+            f"Percent values are not accepted: write 1% as 0.01, not 1.0."
+        )
+    return parsed
+
+
 def _int(value: Any, field_name: str) -> int:
     try:
         parsed = int(value)
@@ -107,16 +125,16 @@ def _strategy_config(raw: dict[str, Any]) -> StrategyConfig:
         ),
         sma_bars=_int(_required(raw, "sma_bars"), "strategy.sma_bars"),
         long_sma_bars=_int(raw.get("long_sma_bars", 50), "strategy.long_sma_bars"),
-        entry_threshold_pct=_decimal(
+        entry_threshold_pct=_fraction(
             _required(raw, "entry_threshold_pct"), "strategy.entry_threshold_pct"
         ),
-        exit_threshold_pct=_decimal(
+        exit_threshold_pct=_fraction(
             _required(raw, "exit_threshold_pct"), "strategy.exit_threshold_pct"
         ),
         trend_filter_enabled=_bool(
             raw.get("trend_filter_enabled", True), "strategy.trend_filter_enabled"
         ),
-        max_below_long_sma_pct=_decimal(
+        max_below_long_sma_pct=_fraction(
             raw.get("max_below_long_sma_pct", "0.02"),
             "strategy.max_below_long_sma_pct",
         ),
@@ -124,7 +142,7 @@ def _strategy_config(raw: dict[str, Any]) -> StrategyConfig:
             raw.get("stop_loss_enabled", True),
             "strategy.stop_loss_enabled",
         ),
-        stop_loss_pct=_decimal(
+        stop_loss_pct=_fraction(
             raw.get("stop_loss_pct", "0.01"),
             "strategy.stop_loss_pct",
         ),
@@ -132,15 +150,15 @@ def _strategy_config(raw: dict[str, Any]) -> StrategyConfig:
             raw.get("breakout_sma_bars", 20),
             "strategy.breakout_sma_bars",
         ),
-        breakout_threshold_pct=_decimal(
+        breakout_threshold_pct=_fraction(
             raw.get("breakout_threshold_pct", "0.002"),
             "strategy.breakout_threshold_pct",
         ),
-        momentum_exit_threshold_pct=_decimal(
+        momentum_exit_threshold_pct=_fraction(
             raw.get("momentum_exit_threshold_pct", "0.001"),
             "strategy.momentum_exit_threshold_pct",
         ),
-        momentum_stop_loss_pct=_decimal(
+        momentum_stop_loss_pct=_fraction(
             raw.get("momentum_stop_loss_pct", "0.01"),
             "strategy.momentum_stop_loss_pct",
         ),
